@@ -41,24 +41,6 @@ union nettlp_mnic_rx_desc {
 	} wb;  /* writeback */
 };
 
-struct nettlp_mnic{
-	volatile union nettlp_mnic_tx_desc *nmtd;//tx descriptor
-	volatile union nettlp_mnic_rx_desc *nmrd;//rx descriptor
-	struct mnic_bar4 mbar4;
-	struct mnic_rx_register mrr;
-	struct mnic_tx_register mtr;
-};
-
-struct mnic_bar4{
-	uint64_t tx_desc_base;
-	uint64_t rx_desc_base;
-	
-	uint32_t tx_desc_idx;
-	uint32_t rx_desc_idx;
-
-	uint32_t enabled;
-}__attribute__((packed));
-
 struct mnic_rx_register{
 	uint64_t rdba; //receive base address registers
 	uint64_t rdlen; //receive descriptor length registers
@@ -71,6 +53,20 @@ struct mnic_tx_register{
 	uint64_t tdlen; //transmit descirptor len
 	uint64_t tdh; //transmit descriptor head
 	uint64_t tdt; //transmit descriptor tail
+};
+
+struct mnic_bar4{
+	struct mnic_rx_register *mrr;
+	struct mnic_tx_register *mtr;	
+	uint32_t tx_desc_idx;
+	uint32_t rx_desc_idx;
+	uint32_t enabled;
+}__attribute__((packed));
+
+struct nettlp_mnic{
+	volatile union nettlp_mnic_tx_desc *nmtd;//tx descriptor(max queue 4096,min queue 512)
+	volatile union nettlp_mnic_rx_desc *nmrd;//rx descriptor(max queue 4096,min queue 512)
+	struct mnic_bar4 mbar4;
 };
 
 #ifndef NDEBUG
