@@ -134,8 +134,8 @@ int main(int argc,char **argv)
 	}
 	
 	memset(&mnic,0,sizeof(mnic));
-	snic.fd = fd;
-	snic.bar4_start = nettlp_msg_get_bar4_start(host);
+	mnic.fd = fd;
+	mnic.bar4_start = nettlp_msg_get_bar4_start(host);
 	if(snic.bar4_start == 0){
 		debug("failed to get BAR4 addr from %s\n",inet_ntoa(host));
 		info("nettlp_msg_get_bar4_start");
