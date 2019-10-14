@@ -42,17 +42,17 @@ union nettlp_mnic_rx_desc {
 };
 
 struct mnic_rx_register{
-	uint64_t rdba; //receive base address registers
-	uint64_t rdlen; //receive descriptor length registers
-	uint64_t rdh; //receive descriptor head
-	uint64_t rdt; //receive descriptor tail
+	uint64_t rdba;//receive base address register rdbl(32bit) rdbh(32bit) (low&high)
+	uint64_t rdlen;//receive descriptor length 
+	uint64_t rdh;//receive descriptor head
+	uint64_t rdt;//receive descriptor tail
 };
 
 struct mnic_tx_register{
-	uint64_t tdba; //transmit descriptor base address
-	uint64_t tdlen; //transmit descirptor len
-	uint64_t tdh; //transmit descriptor head
-	uint64_t tdt; //transmit descriptor tail
+	uint64_t tdba;//transmit descriptor base address tdbl(32bit) tdbh(32bit) (low&high)
+	uint64_t tdlen;//transmit descirptor length
+	uint64_t tdh;//transmit descriptor head
+	uint64_t tdt;//transmit descriptor tail
 };
 
 struct mnic_bar4{
@@ -63,9 +63,39 @@ struct mnic_bar4{
 	uint32_t enabled;
 }__attribute__((packed));
 
+struct memory_pool{
+	void *base_addr;
+	uint32_t base;
+	uint32_t mem_size;
+	uint32_t mem_idx;
+	uint32_t free_area_top;
+	uint32_t free_area[];
+};
+
+struct packet_buffer{
+	struct memory_pool *memp;
+	uintptr_t addr;
+	uint32_t index;
+	uint32_t size;
+	uint8_t data[] __attribute_((aligned(64));
+};
+struct tx_queue{
+	volatile union nettlp_mnic_tx_desc *nmtd;
+	struct packet_buffer *tx_pool;//buffer pool for packet??
+	//struct packet_buffer *pkt_addr_backup;//save a copy of packet buffer address for writeback descriptor
+};
+
+struct rx_queue{
+	volatile union nettlp_mnic_rx_desc *nmrd;
+	struct packet_buffer *rx_pool;// buffer pool for packet??
+	//struct packet_buffer *pkt_addr_backup;//save a copy of packet buffer address for writeback descriptor
+};
+
 struct nettlp_mnic{
-	volatile union nettlp_mnic_tx_desc *nmtd;//tx descriptor(max queue 4096,min queue 512)
-	volatile union nettlp_mnic_rx_desc *nmrd;//rx descriptor(max queue 4096,min queue 512)
+	//tx descriptor(max queue 4096,min queue 512)
+	struct tx_queue *txq;
+	//rx descriptor(max queue 4096,min queue 512)
+	struct rx_queue *rxq;
 	struct mnic_bar4 mbar4;
 };
 

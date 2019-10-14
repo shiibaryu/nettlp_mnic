@@ -66,6 +66,13 @@ int tap_up(char *dev)
 
 void usage()
 {
+	printf("usage\n"
+	       "    -r remote addr\n"
+	       "    -l local addr\n"
+	       "    -R remote host addr (not TLP NIC)\n"
+	       "\n"
+	       "    -t tunif name (default tap0)\n"
+		);	
 }
 
 int main(int argc,char **argv)
