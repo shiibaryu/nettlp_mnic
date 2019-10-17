@@ -105,7 +105,6 @@ struct tx_queue{
 
 struct rx_queue{
 	volatile union nettlp_mnic_rx_desc *nmrd;
-	struct memory_pool *memp;
 	uint16_t num_entries;
 	uint16_t rx_index;
 	uint16_t *virtual_addr[];
