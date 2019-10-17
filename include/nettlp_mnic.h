@@ -95,7 +95,6 @@ struct packet_buffer{
 
 struct tx_queue{
 	volatile union nettlp_mnic_tx_desc *nmtd;
-	struct memory_pool *memp;
 	uint16_t num_entries;
 	uint16_t tx_index;
 	uint16_t clean_index;	
