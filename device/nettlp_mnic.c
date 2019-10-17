@@ -18,6 +18,17 @@
 #include <libtlp.h>
 #include <nettlp_mnic.h>
 
+struct mnic_device{
+	//tap fd 
+	int tap_fd;
+	uintptr_t bar4_start;
+	uintptr_t tx_desc_base;
+	uintptr_t rx_desc_base;
+
+	struct nettlp *rx_nt; 
+
+};
+
 int tap_alloc(char *dev)
 {
         struct ifreq ifr;
@@ -64,6 +75,59 @@ int tap_up(char *dev)
         return 0;
 }
 
+static int caught_signal = 0;
+
+void signal_handler(int signal)
+{
+	caught_signal = 1;
+	nettlp_stop_cb();
+}
+
+int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mr,void *m,size_t count,void *arg)
+{
+	int ret;
+	struct nettlp_mnic *mnic = arg;
+	
+	dma_addr = tlp_mr_addr(mh);
+	info("dma addr is %lx\n",mh);
+	
+	
+}
+
+void *nettlp_mnic_tap_read_thread(void *arg)
+{
+	int ret,len;
+	char buf[2048];
+	struct nettlp_mnic *mnic = arg;
+	struct poll_fd x[1] = {{.fd = mnic->tap_fd,.events = POLLIN}};
+
+	while(1){
+		if(caught_signal){
+			break;
+		}
+		ret = poll(x,1,500);
+		if(ret < 0 || ret == 0 || !(x[0].revents & POLLIN)){
+			continue;
+		}
+		
+		len = read(mnic->tap_fd,buf,sizeof(buf));
+		if(len<0){
+			perror("read");
+			continue;
+		}
+		
+		ret = dma_write(mnic->,mnic->rx_desc.addr,buf,len);
+		if(ret < 0){
+			debug("failed to dma_write pkt to %lx",mnic->rx_desc.addr);
+			continue;
+		}
+		
+		info("RX done. DMA write to %lx %d byte",mnic->rx_desc,len);
+	}
+
+	return NULL;
+}
+
 void usage()
 {
 	printf("usage\n"
@@ -75,15 +139,43 @@ void usage()
 		);	
 }
 
+	/*
+		tx
+		1.host updates the tx queue tail pointer
+		2.device dmas descriptor
+		3.device dmas packet content
+		4.device writes back tx descriptor(optional)
+		---omitted---
+		5.device generate interrupt??
+		6.host reads tx queue head pointer
+		---omitted---
+		device can fetch up to 40 tx descriptor
+		device may prefetch tx descriptors if its internal Q
+		becomes close to empty.
+		all descriptor are 128 bit
+
+		rx
+		1.host updates rx queue tail pointer -> free buf
+		2.device dmas descriptor from host
+		3.device dmas packet to host
+		4.device writes back rx descriptor
+		---ommited---
+		5.devicce generates interrupt
+		6.host read rx queue head pointer
+		---ommited---
+		niantic does not prefetch freelist descriptors(on demand)
+		niantic does not seem to be doing any batching of rx descriptor write-back.
+	*/
+
 int main(int argc,char **argv)
 {
-        int opt,ret,fd;
+        int opt,ret,tap_fd;
         char *ifname = "tap8";
-	struct nettlp nt;
+	struct nettlp nt,nts[16],*nts_ptr[16];
+	struct nettlp nttlp_cb;
 	struct in_addr host;
-	struct mnic mnic;	
-
-	memset(&nt,0,sizeof(nt));
+	struct nettlp_mnic mnic;	
+	pthread_t rx_tid; //tap_read_thread
 
         while((opt = getopt(argc,argv,"t:r:l:R:")) != -1){
                 switch(opt){
@@ -117,7 +209,10 @@ int main(int argc,char **argv)
                 }
         }
 
-        fd = tap_alloc(ifname);
+	memset(&nt,0,sizeof(nt));
+	memset(&mnic,0,sizeof(mnic));
+
+        tap_fd = tap_alloc(ifname);
         if(fd < 0){
                 perror("failed to allocate tap");
                 return -1;
@@ -139,11 +234,11 @@ int main(int argc,char **argv)
 			return ret;
 		}
 	}
-	
-	memset(&mnic,0,sizeof(mnic));
-	mnic.fd = fd;
-	mnic.bar4_start = nettlp_msg_get_bar4_start(host);
-	if(snic.bar4_start == 0){
+		
+	mnic.tap_fd = tap_fd;
+	//how to get bar ??
+
+	/*if(snic.bar4_start == 0){
 		debug("failed to get BAR4 addr from %s\n",inet_ntoa(host));
 		info("nettlp_msg_get_bar4_start");
 		return -1;
@@ -152,37 +247,24 @@ int main(int argc,char **argv)
 	if(ret < 0){
 		debug("faled to get msix table from %s\n",inet_ntoa(host));
 		info("nettlp_msg_get_msix_table");
-	}	
-	
-	
-	/*
-		tx
-		1.host updates the tx queue tail pointer
-		2.device dmas descriptor
-		3.device dmas packet content
-		4.device writes back tx descriptor(optional)
-		---omitted---
-		5.device generate interrupt??
-		6.host reads tx queue head pointer
-		---omitted---
-		device can fetch up to 40 tx descriptor
-		device may prefetch tx descriptors if its internal Q
-		becomes close to empty.
-		all descriptor are 128 bit
-
-		rx
-		1.host updates rx queue tail pointer -> free buf
-		2.device dmas descriptor from host
-		3.device dmas packet to host
-		4.device writes back rx descriptor
-		---ommited---
-		5.devicce generates interrupt
-		6.host read rx queue head pointer
-		---ommited---
-		niantic does not prefetch freelist descriptors(on demand)
-		niantic does not seem to be doing any batching of rx descriptor write-back.
-	*/
-
+	}*/	
        
+	if(signal(SIGINT,signal_handler)==SIG_ERR){
+		debug("failed to set signal");
+		return -1;
+	}
+
+	info("create tap read thread\n");
+	pthread_create(&rx_tid,NULL,nettlp_mnic_tap_read_thread,&mnic);
+	
+	info("start nettlp callback");
+	memset(&cb,0,sizeof(cb));
+	cb.mwr = nettlp_mnic_mwr;
+	nettlp_run_cb(nts_ptr,16,&cb,&mnic);
+
+	info("nettlp callback done");
+
+	pthread_join(rx_tid,NULL);
+
         return 0;
 }

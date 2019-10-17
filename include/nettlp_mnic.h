@@ -1,4 +1,4 @@
-union nettlp_mnic_tx_desc{
+union mnic_tx_descriptor{
 	struct {
 		__le64 buffer_addr;//address of descriptor's data buf
 		__le64 cmd_type_len;
@@ -11,7 +11,7 @@ union nettlp_mnic_tx_desc{
 	}wb;
 };
 
-union nettlp_mnic_rx_desc {
+union mnic_rx_descriptor{
 	struct {
 		__le64 pkt_addr; /* Packet buffer address */
 		__le64 hdr_addr; /* Header buffer address */
@@ -46,22 +46,35 @@ struct mnic_rx_register{
 	uint64_t rdlen;//receive descriptor length 
 	uint64_t rdh;//receive descriptor head
 	uint64_t rdt;//receive descriptor tail
-};
+}__attribute__((packed));
 
 struct mnic_tx_register{
 	uint64_t tdba;//transmit descriptor base address tdbl(32bit) tdbh(32bit) (low&high)
 	uint64_t tdlen;//transmit descirptor length
 	uint64_t tdh;//transmit descriptor head
 	uint64_t tdt;//transmit descriptor tail
-};
+}__attribute__((packed));
 
 struct mnic_bar4{
-	struct mnic_rx_register *mrr;
+ 	struct mnic_rx_register *mrr;
 	struct mnic_tx_register *mtr;	
 	uint32_t tx_desc_idx;
 	uint32_t rx_desc_idx;
 	uint32_t enabled;
-}__attribute__((packed));
+};
+
+struct mnic_bar0{
+	uint32_t magic;
+	
+	uint8_t dstmac[6];
+	uint16_t rsv1;
+
+	uint8_t srcmac[6];
+	uint16_t rsv2;
+
+	__be32 srcip;
+	__be32 dstip;
+};
 
 struct memory_pool{
 	void *base_addr;
@@ -79,25 +92,35 @@ struct packet_buffer{
 	uint32_t size;
 	uint8_t data[] __attribute_((aligned(64));
 };
+
 struct tx_queue{
 	volatile union nettlp_mnic_tx_desc *nmtd;
-	struct packet_buffer *tx_pool;//buffer pool for packet??
+	struct memory_pool *memp;
+	uint16_t num_entries;
+	uint16_t tx_index;
+	uint16_t clean_index;	
+	void *virtual_addr[];
+	//struct packet_buffer *tx_pool;//buffer pool for packet??
 	//struct packet_buffer *pkt_addr_backup;//save a copy of packet buffer address for writeback descriptor
 };
 
 struct rx_queue{
 	volatile union nettlp_mnic_rx_desc *nmrd;
-	struct packet_buffer *rx_pool;// buffer pool for packet??
+	struct memory_pool *memp;
+	uint16_t num_entries;
+	uint16_t rx_index;
+	uint16_t *virtual_addr[];
+	//struct packet_buffer *rx_pool;// buffer pool for packet??
 	//struct packet_buffer *pkt_addr_backup;//save a copy of packet buffer address for writeback descriptor
 };
 
-struct nettlp_mnic{
+/*struct nettlp_mnic{
 	//tx descriptor(max queue 4096,min queue 512)
 	struct tx_queue *txq;
 	//rx descriptor(max queue 4096,min queue 512)
 	struct rx_queue *rxq;
 	struct mnic_bar4 mbar4;
-};
+};*/
 
 #ifndef NDEBUG
 #define debug(fmt, ...) do {\
