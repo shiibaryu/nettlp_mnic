@@ -14,6 +14,14 @@
 #define DRV_NAME 	    "nettlp_mnic_driver"
 
 #define MNIC_DESC_RING_LEN  1
+
+#define MNIC_TX_QUEUE_ENTRIES 512
+#define MNIC_RX_QUEUE_ENTRIES 512
+
+#define PKT_BUF_ENTRY_SIZE 2048
+
+#define TX_CLEAN_BATCH 64
+
 struct nettlp_mnic_adpter{
 	struct pci_devi *pdev;
 	struct net_device *dev;
@@ -24,8 +32,21 @@ struct nettlp_mnic_adpter{
 
 	struct tx_queue *txq;
 	struct rx_queue *rxq;
-};
 
+	struct pkt_buffer *tx_buf;
+	struct pkt_buffer *rx_buf;
+
+	spinlock_t tx_lock;
+	spinlock_t rx_lock;
+	struct tasklet_struct *rx_tasklet;
+
+#define TX_STATE_READY 1
+#define RX_STATE_BUSY  2
+};
+//bar4の見直し、関数実装、ｍｓｇ
+static const struct net_device_ops nettlp_mnic_ops = {
+
+};
 static const struct pci_device_id nettlp_mnic_pci_tbl[] = {
 	{0x3776,0x8022,PCI_ANY_ID,PCI_ANY_ID,0,0,0},
 	{0,}
@@ -138,24 +159,137 @@ static void nettlp_mnic_pci_init(struct pci_dev *pdev,const struct pci_device_id
 	}
 
 	//get a virtual address of dma buffer and store physical address to variable 3
-	adpter->tx_desc = dma_alloc_coherent(&pdev->dev,sizeof(struct descriptor)*MNIC_DESC_RING_LEN,&adpter->tx_desc_paddr,GFP_KERNEL);
-	if(!adpter->tx_desc){
+	m_adpter->txq = dma_alloc_coherent(&pdev->dev,sizeof(struct tx_queue)*MNIC_TX_QUEUE_ENTRIES,&m_adpter->tx_desc_paddr,GFP_KERNEL);
+	if(!m_adpter->txq){
 		pr_info("%s: failed to alloc tx descriptor\n",__func__);
 		goto err6;
 	}	
 
-	adpter->rx_desc = dma_alloc_coherent(&pdev->dev,sizeof(struct descriptor)*MNIC_DESC_RING_LEN,&adpter->rx_desc_paddr,GFP_KERNEL);
-	if(!adpter->rx_desc){
+	m_adpter->rxq = dma_alloc_coherent(&pdev->dev,sizeof(struct rx_queue)*MNIC_RX_QUEUE_ENTRIES,&m_adpter->rx_desc_paddr,GFP_KERNEL);
+	if(!m_adpter->rxq){
 		pr_info("%s: failed to alloc rx descriptor\n",__func__);
 		goto err6;
 	}	
 
+	m_adpter->tx_buf = dma_alloc_coherent(&pdev->dev,sizeof(struct packet_buffer)*PKT_BUF_ENTRY_SIZE,&adpter->tx_buf->paddr,GFP_KERNEL);
+	if(!m_adpter->tx_buf){
+		pr_info("%s: failed to alloc tx buffer\n",__func__);
+		goto err6;
+	}	
+
+	m_adpter->rx_buf = dma_alloc_coherent(&pdev->dev,sizeof(struct packet_buffer)*PKT_BUF_ENTRY_SIZE,&adpter->rx_buf->paddr,GFP_KERNEL);
+	if(!m_adpter->rx_buf){
+		pr_info("%s: failed to alloc rx buffer\n",__func__);
+		goto err6;
+	}	
+
+	spin_lock_init(&adpter->tx_lock);
+	spin_lock_init(&adpter->rx_lock);
+
+	mnic_get_mac(ndev->dev_addr,adpter->bar0->srcmac);	
+	ndev->needs_free_netdev = true;
+	ndev->netdev_ops = &nettlp_mnic_ops;
+	ndev->min_mtu = ETH_MIN_MTU;
+	ndev->max_mtu = ETH_MAX_MTU;
 	
+	ret = register_netdev(ndev);
+	if(ret){
+		goto err7;
+	}
+	
+	//initialize tasklet for rx interrupt
+	adpter->rx_tasklet = kmalloc(sizeof(struct tasklet_struct),GFP_KERNEL);
+	if(m_adpter->rx_tasklet){
+		ret = -ENOMEM;
+		goto err8;
+	}
+	tasklet_init(m_adpter->rx_tasklet,rx_tasklet,(unsigned long)m_adpter);
+
+	//register interrupt
+	ret = nettlp_register_interrupts(m_adpter);
+	if(ret){
+		goto err9;
+	}
+
+	nettlp_msg_init(bar4_start,PCI_DEVID(pdev->bus->number,pdev->devfn);
+	
+	//initialize each variable
+	m_adpter->txq->tx_index = 0;
+	m_adpter->txq->clean_index = 0;
+	m_adpter->txq->num_entries = 0;
+	
+	m_adpter->rxq->rx_index = 0;
+	m_adpter->rxq->num_entries = 0;
+	
+	m_adpter->tx_buf->index = 0;
+	m_adpter->tx_buf->memp->index = 0;
+
+	m_adpter->rx_buf->index = 0;
+	m_adpter->rx_buf->memp->index = 0;
+
+	pr_info("%s: probe finished.",__func__);
+	
+	return 0;
+err9:
+	kfree(m_adapter->rx_tasklet);
+err8:
+	unregister_netdev(dev);
+err7:
+	dma_free_coherent(&pdev->dev,sizeof(struct tx_queue)*MNIC_TX_QUEUE_ENTRIES,(void*)m_adpter->txq,m_adpter->txq->tx_desc_paddr);
+
+	dma_free_coherent(&pdev->dev,sizeof(struct rx_queue)*MNIC_RX_QUEUE_ENTRIES,(void*)m_adpter->rxq,m_adpter->rxq->rx_desc_paddr);
+
+	dma_free_coherent(&pdev->dev,sizeof(struct packet_buffer)*PKT_BUF_ENTRY_SIZE,(void*)m_adpter->tx_buf,&m_adpter->tx_buf->paddr);
+
+	dma_free_coherent(&pdev->dev,sizeof(struct packet_buffer)*PKT_BUF_ENTRY_SIZE,(void*)m_adpter->rx_buf,&m_adpter->rx_buf->paddr);
+
+err6:
+	iounmap(bar4);
+err5:
+	iounmap(bar2);
+err4:
+	iounmap(bar0);
+err3:
+	pci_release_regions(pdev);
+err2:
+	pci_disable_device(pdev);
+err1:
+
+	return ret;
 }
+
 
 static void nettlp_mnic_pci_remove(struct pci_dev *pdev)
 {
+	struct net_device *dev = pci_get_drvdata(pdev);
+	struct nettl_snic_adpter *m_adpter = netdev_priv(dev);
 
+	pr_info("start remove pci config");
+
+	kfree(m_adpter->rx_tasklet);
+	
+	nettlp_msg_fini();
+	nettlp_unregister_interrupts(m_adpter);
+	pci_free_irq_vectors(pdev);
+	
+	unregister_netdev(dev);
+	
+	dma_free_coherent(&pdev->dev,sizeof(struct tx_queue)*MNIC_TX_QUEUE_ENTRIES,(void*)m_adpter->txq,m_adpter->txq->tx_desc_paddr);
+
+	dma_free_coherent(&pdev->dev,sizeof(struct rx_queue)*MNIC_RX_QUEUE_ENTRIES,(void*)m_adpter->rxq,m_adpter->rxq->rx_desc_paddr);
+
+	dma_free_coherent(&pdev->dev,sizeof(struct packet_buffer)*PKT_BUF_ENTRY_SIZE,(void*)m_adpter->tx_buf,&m_adpter->tx_buf->paddr);
+
+	dma_free_coherent(&pdev->dev,sizeof(struct packet_buffer)*PKT_BUF_ENTRY_SIZE,(void*)m_adpter->rx_buf,&m_adpter->rx_buf->paddr);
+	
+	iounmap(bar4);
+	iounmap(bar2);
+	iounmap(bar0);
+	
+	pci_release_regions(pdev);
+	pci_disable_device(pdev);
+	
+	return;
 }
 
 struct pci_driver nettlp_mnic_pci_driver = {
