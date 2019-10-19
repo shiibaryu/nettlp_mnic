@@ -42,11 +42,181 @@ struct nettlp_mnic_adpter{
 
 #define TX_STATE_READY 1
 #define RX_STATE_BUSY  2
+
+	uint32_t tx_state;	
 };
+
+static int nettlp_mnic_init(struct net_device *ndev)
+{
+	pr_info("%s\n",__func__);
+
+	//setup coutners
+	ndev->tstats = netdev_alloc_pcpu_stats(struct pcpu_sw_netstats);	
+	if(!ndev->tstats){
+		return -ENOMEM;
+	}
+	return 0;
+}
+
+static void nettlp_mnic_uninit(struct net_device *ndev)
+{
+	pr_info("%s\n",__func__);
+
+	free_percpu(ndev->tstats);
+}
+
+static int nettlp_mnic_open(struct net_device *ndev)
+{
+	pr_info("%s\n",__func__);
+
+	struct nettlp_mnic_adpter *m_adpter = netdev_priv(ndev);
+	m_adpter->bar4->enabled = 1;
+	m_adpter->tx_state = TX_STATE_READY;
+	
+	adpter->bar4->txba = adpter->txq->
+}
+
+static int nettlp_mnic_stop(struct net_device *ndev)
+{
+	pr_info("%s\n",__func__);
+
+	struct nettlp_mnic_adpter *m_adpter = netdev_priv(ndev);
+	m_adpter->tx_state = 0;
+ 	m_adpter->enabled  = 0;
+
+	tasklet_kill(m_adpter->rx_tasklet);
+
+	return 0;
+}
+
+static int nettlp_mnic_xmit(struct net_device *ndev)
+{
+	pr_info("%s\n",__func__);
+	
+	struct nettlp_mnic_adpter *m_adpter = netdev_priv(ndev);
+
+}
+
+static int nettlp_mnic_ioctl(struct net_device *ndev)
+{
+}
+
+static int nettlp_mnic_set_mac(struct net_device *ndev,void *p)
+{
+	struct nettlp_mnic_adpter *m_adpter = netdev_priv(ndev);	
+	struct sockaddr *adddr = p;
+
+	if(!is_valid_ether_addr(addr->sa_data)){
+		return -EADDRNOTAVAIL;
+	}
+
+	memcpy(ndev->dev_addr,addr->sa_data,ndev->addr_len);
+	mnic_get_mac(adpter->bar0->srcmac,ndev->dev_addr);
+
+	return 0;
+}
+
+
 //bar4の見直し、関数実装、ｍｓｇ
 static const struct net_device_ops nettlp_mnic_ops = {
-
+	.ndo_init		= nettlp_mnic_init,
+	.ndo_uninit		= nettlp_mnic_uninit,
+	.ndo_open		= nettlp_mnic_open, 
+	.ndo_stop		= nettlp_mnic_stop,
+	.ndo_start_xmit 	= nettlp_mnic_xmit,
+	.ndo_do_ioctl		= nettlp_mnic_ioctl,
+	.ndo_get_stats  	= ip_tunnel_get_stats64,
+	.ndo_change_mtu 	= eth_change_mtu,
+	.ndo_validate_addr 	= eth_validate_addr,
+	.ndo_set_mac_address	= nettlp_mnic_set_mac,
 };
+
+void rx_tasklet(unsigned long tasklet_data)
+{
+	pr_info("%s\n",__func__);
+	unsigned long flags;
+	struct sk_buff *skb;
+	struct nettlp_mnic_adpter *m_adpter = (struct nettlp_mnic_adpter *)tasklet_data;
+	
+	spin_lock_irqsave(&m_adpter->rx_lock,flags);
+	
+}
+
+static irqreturn_t tx_handler(int irq,void *nic_irq)
+{
+	pr_info("%s\n",__func__);
+	pr_info("tx interrupt irq = %d\n",irq);
+	unsigned long flags;
+	struct nettlp_mnic_adpter *m_adpter = nic_irq;
+	
+	spin_lock_irqsave(&m_adpter->tx_lock,flags);
+	if(m_adpter->tx_state != TX_STATE_BUSY){
+		goto out;
+	}
+	adpter->tx_state = TX_STATE_READY;
+
+out:	
+	spin_unlock_irqrestore(&m_adpter->tx_lock,flags);
+
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t rx_handler(int irq,void *nic_irq)
+{
+	pr_info("%s\n",__func__);
+	pr_info("rx interrupt irq = %d\n",irq);
+	unsigned long flags;
+	struct nettlp_mnic_adpter *m_adpter = nic_irq;
+
+	spin_lock_irqsave(&m_adpter->rx_lock,flags);
+	tasklet_schedule(adpter->rx_tasklet);
+
+	spin_unlock_irqrestore(&m_adpter->rx_lock,flags);
+
+	return IRQ_HANDLED;
+}
+
+//use MSI-X
+static int nettlp_mnic_interrupts(struct nettlp_mnic_adpter *m_adpter)
+{
+	//how to register interuppts
+	//1.alloc irq vectors
+	//2.register irq handler
+
+	int ret,irq;
+	
+	//1.allocate irq vectors
+	ret = pci_alloc_irq_vectors(m_adpter->pdev,2,2,PCI_IRQ_MSIX);
+	if(ret < 0){
+		pr_info("Request for #%d msix vectors failed, returned %d\n",NETTLP_
+NUM_VEC,ret);
+		return -1;
+	}
+
+	//2.register irq handler(irq1:tx_handler,irq2:rx_handler)
+	irq = pci_irq_vector(m_adpter->pdev,0);
+	ret = request_irq(irq,tx_handler,0,DRV_NAME,m_adpter);
+	if(ret<0){
+		pr_info("%s:failed to request irq of tx_handler\n",__func__);
+		return -1;
+	}
+
+	irq = pci_irq_vector(m_adpter->pdev,1);
+	ret = request_irq(irq,rx_handler,1,DRV_NAME,m_adpter);
+	if(ret<0){
+		pr_info("%s:failed to request irq of rx_handler\n",__func__);
+		return -1;
+	}
+
+	return 0;
+}
+
+static void nettlp_unregister_interrupts(struct nettlp_mnic_adpter *m_adpter)
+{
+	free_irq(pci_irq_vector(m_adpter->pdev,0),m_adpter);
+	free_irq(pci_irq_vector(m_adpter->pdev,1),m_adpter);
+} 
+
 static const struct pci_device_id nettlp_mnic_pci_tbl[] = {
 	{0x3776,0x8022,PCI_ANY_ID,PCI_ANY_ID,0,0,0},
 	{0,}
@@ -211,7 +381,7 @@ static void nettlp_mnic_pci_init(struct pci_dev *pdev,const struct pci_device_id
 		goto err9;
 	}
 
-	nettlp_msg_init(bar4_start,PCI_DEVID(pdev->bus->number,pdev->devfn);
+	nettlp_msg_init(bar4_start,PCI_DEVID(pdev->bus->number,pdev->devfn));
 	
 	//initialize each variable
 	m_adpter->txq->tx_index = 0;
