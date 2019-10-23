@@ -46,6 +46,7 @@ struct nettlp_mnic_adpter{
 	uint32_t tx_state;	
 };
 
+//bar4,
 static int nettlp_mnic_init(struct net_device *ndev)
 {
 	pr_info("%s\n",__func__);
@@ -55,6 +56,7 @@ static int nettlp_mnic_init(struct net_device *ndev)
 	if(!ndev->tstats){
 		return -ENOMEM;
 	}
+	
 	return 0;
 }
 
@@ -65,6 +67,7 @@ static void nettlp_mnic_uninit(struct net_device *ndev)
 	free_percpu(ndev->tstats);
 }
 
+//
 static int nettlp_mnic_open(struct net_device *ndev)
 {
 	pr_info("%s\n",__func__);
@@ -73,9 +76,18 @@ static int nettlp_mnic_open(struct net_device *ndev)
 	m_adpter->bar4->enabled = 1;
 	m_adpter->tx_state = TX_STATE_READY;
 	
-	adpter->bar4->txba = adpter->txq->
+	//address setting for open
+	m_adpter->bar4->tx->tdba = m_adpter->tx_desc_paddr;
+	m_adpter->bar4->rx->rdba = m_adpter->rx_desc_paddr;
+	
+	m_adpter->bar4->tx->tdba = m_adpter->tx_desc_paddr;
+	m_adpter->bar4->rx->rdba = m_adpter->rx_desc_paddr;
+	
+	pr_info("notify descriptor base address, TX %#llx,RX %#llx\n",
+		m_adp);
 }
 
+//
 static int nettlp_mnic_stop(struct net_device *ndev)
 {
 	pr_info("%s\n",__func__);
@@ -89,6 +101,7 @@ static int nettlp_mnic_stop(struct net_device *ndev)
 	return 0;
 }
 
+//
 static int nettlp_mnic_xmit(struct net_device *ndev)
 {
 	pr_info("%s\n",__func__);
@@ -396,6 +409,11 @@ static void nettlp_mnic_pci_init(struct pci_dev *pdev,const struct pci_device_id
 
 	m_adpter->rx_buf->index = 0;
 	m_adpter->rx_buf->memp->index = 0;
+
+	m_adpter->bar4->tx->tdh = 0;
+	m_adpter->bar4->tx->tdt = 0;
+	m_adpter->bar4->rx->rdh = 0;
+	m_adpter->bar4->rx->rdt = 0;
 
 	pr_info("%s: probe finished.",__func__);
 	

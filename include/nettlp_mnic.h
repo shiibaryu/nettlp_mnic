@@ -56,8 +56,8 @@ struct mnic_tx_register{
 }__attribute__((packed));
 
 struct mnic_bar4{
- 	struct mnic_rx_register *mrr;
-	struct mnic_tx_register *mtr;	
+ 	struct mnic_rx_register *rx;
+	struct mnic_tx_register *tx;	
 	//uint32_t tx_desc_idx;
 	//uint32_t rx_desc_idx;
 	uint32_t enabled;
