@@ -61,7 +61,7 @@ struct mnic_bar4{
 	//uint32_t tx_desc_idx;
 	//uint32_t rx_desc_idx;
 	uint32_t enabled;
-};
+}__attribute__((packed));
 
 struct mnic_bar0{
 	uint32_t magic;

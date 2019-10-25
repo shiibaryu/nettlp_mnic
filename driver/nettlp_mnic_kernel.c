@@ -21,6 +21,7 @@
 #define PKT_BUF_ENTRY_SIZE 2048
 
 #define TX_CLEAN_BATCH 64
+#define POOL_SIZE 64
 
 struct nettlp_mnic_adpter{
 	struct pci_devi *pdev;
@@ -38,15 +39,18 @@ struct nettlp_mnic_adpter{
 
 	spinlock_t tx_lock;
 	spinlock_t rx_lock;
+
 	struct tasklet_struct *rx_tasklet;
+	struct napi_struct napi;
 
 #define TX_STATE_READY 1
 #define RX_STATE_BUSY  2
-
 	uint32_t tx_state;	
+	uint8_t  napi_enabled;
 };
 
-//bar4,
+//rx_tasklet,xmit,napi,open
+
 static int nettlp_mnic_init(struct net_device *ndev)
 {
 	pr_info("%s\n",__func__);
@@ -80,11 +84,16 @@ static int nettlp_mnic_open(struct net_device *ndev)
 	m_adpter->bar4->tx->tdba = m_adpter->tx_desc_paddr;
 	m_adpter->bar4->rx->rdba = m_adpter->rx_desc_paddr;
 	
-	m_adpter->bar4->tx->tdba = m_adpter->tx_desc_paddr;
-	m_adpter->bar4->rx->rdba = m_adpter->rx_desc_paddr;
+	/*m_adpter->bar4->tx->tdh = m_adpter->tx_desc_paddr;
+	m_adpter->bar4->tx->tdh = m_adpter->tx_desc_paddr;
+
+	m_adpter->bar4->tx->tdt = m_adpter->tx_desc_paddr;
+	m_adpter->bar4->rx->rdt = m_adpter->rx_desc_paddr;*/
 	
 	pr_info("notify descriptor base address, TX %#llx,RX %#llx\n",
-		m_adp);
+		m_adpter->bar4->tx->tdba,m_adpter->bar4->rx->rdba);
+
+	return 0;
 }
 
 //
@@ -101,17 +110,36 @@ static int nettlp_mnic_stop(struct net_device *ndev)
 	return 0;
 }
 
-//
-static int nettlp_mnic_xmit(struct net_device *ndev)
+static netdev_tx_t nettlp_mnic_xmit(struct sk_buff *skb,struct net_device *dev)
 {
 	pr_info("%s\n",__func__);
-	
+	dma_addr_t dma;
+	uint32_t pktlen;
+	unsigned long flag;
+	struct tx_queue *txq;
 	struct nettlp_mnic_adpter *m_adpter = netdev_priv(ndev);
 
-}
+	spin_lock_irqsave(&m_adpter->tx_lock,flag);
 
-static int nettlp_mnic_ioctl(struct net_device *ndev)
-{
+	txq = m_adpter->txq;
+
+	if(m_adpter->tx_state != TX_STATE_READY){
+		m_adpter->dev->stats.tx_dropped;
+		spin_unlock_irqstore(&m_adpter->tx_lock,flag);
+		kfree_skb(skb);	
+		return NETDEV_TX_OK;
+	}
+
+	m_adpter->tx_state = TX_STATE_BUSY;
+
+	pktlen = skb->len;
+	dma = dma_map_single(&m_adpter->pdev->dev,skb_mac_header(skb),pktlen,DMA_TO_DEVICE);
+
+	txq->nmtd->read.buffer_addr = dma;
+	txq->nmtd->length = pktlen;
+
+	
+		
 }
 
 static int nettlp_mnic_set_mac(struct net_device *ndev,void *p)
@@ -129,22 +157,19 @@ static int nettlp_mnic_set_mac(struct net_device *ndev,void *p)
 	return 0;
 }
 
-
-//bar4の見直し、関数実装、ｍｓｇ
 static const struct net_device_ops nettlp_mnic_ops = {
 	.ndo_init		= nettlp_mnic_init,
 	.ndo_uninit		= nettlp_mnic_uninit,
 	.ndo_open		= nettlp_mnic_open, 
 	.ndo_stop		= nettlp_mnic_stop,
 	.ndo_start_xmit 	= nettlp_mnic_xmit,
-	.ndo_do_ioctl		= nettlp_mnic_ioctl,
 	.ndo_get_stats  	= ip_tunnel_get_stats64,
 	.ndo_change_mtu 	= eth_change_mtu,
 	.ndo_validate_addr 	= eth_validate_addr,
 	.ndo_set_mac_address	= nettlp_mnic_set_mac,
 };
 
-void rx_tasklet(unsigned long tasklet_data)
+/*void rx_tasklet(unsigned long tasklet_data)
 {
 	pr_info("%s\n",__func__);
 	unsigned long flags;
@@ -153,6 +178,22 @@ void rx_tasklet(unsigned long tasklet_data)
 	
 	spin_lock_irqsave(&m_adpter->rx_lock,flags);
 	
+}*/
+
+//NAPI Rx polling callback
+//@napi: napi polling structure
+//budget: count of how many packets we should handle
+static int nettlp_mnic_poll(struct napi_structure *napi,int budget)
+{
+	int ret = 0;
+	struct nettlp_mnic_adpter *m_adpter = container_of(napi,struct nettlp_mnic_adpter,napi);
+	struct net_device *ndev = m_adpter->dev;
+	
+	while(){
+		
+	}
+
+	return 0;
 }
 
 static irqreturn_t tx_handler(int irq,void *nic_irq)
@@ -182,7 +223,11 @@ static irqreturn_t rx_handler(int irq,void *nic_irq)
 	struct nettlp_mnic_adpter *m_adpter = nic_irq;
 
 	spin_lock_irqsave(&m_adpter->rx_lock,flags);
-	tasklet_schedule(adpter->rx_tasklet);
+
+	if(m_adpter->rx_napi_enabled){
+		m_adpter->rx_napi_enabled = 0;
+		napi_schedule(&m_adpter->rx_napi);
+	}
 
 	spin_unlock_irqrestore(&m_adpter->rx_lock,flags);
 
@@ -395,7 +440,12 @@ static void nettlp_mnic_pci_init(struct pci_dev *pdev,const struct pci_device_id
 	}
 
 	nettlp_msg_init(bar4_start,PCI_DEVID(pdev->bus->number,pdev->devfn));
-	
+
+	//initialize and enable napi
+	netif_napi_add(ndev,&m_adpter->napi,nettlp_mnic_poll,POOL_SIZE);
+	napi_enable(&m_adpter->napi);
+	m_adpter->napi_enabled = 1;
+
 	//initialize each variable
 	m_adpter->txq->tx_index = 0;
 	m_adpter->txq->clean_index = 0;
