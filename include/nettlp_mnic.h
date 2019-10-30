@@ -13,6 +13,7 @@
 #define MAX_TX_QUEUES		8
 #define MAX_TX_QUEUES		8
 
+#define MNIC_DEFAULT_ITR	3
 /*#define IGB_RX_PTHRESH	((hw->mac.type == e1000_i354) ? 12 : 8)
 #define IGB_RX_HTHRESH	8
 #define IGB_TX_PTHRESH	((hw->mac.type == e1000_i354) ? 20 : 8)
@@ -291,7 +292,7 @@ struct mnic_adpter{
 	struct tasklet_struct *rx_tasklet;
 	struct napi_struct napi;
 
-	//uint8_t msg_enable;
+	uint8_t msg_enable;
 	uint8_t napi_enabled;
 	uint32_t rss_queus;
 	//struct tx_queue *txq;
