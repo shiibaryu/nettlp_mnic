@@ -198,7 +198,7 @@ static int mnic_setup_tx_resource(struct mnic_ring *tx_ring)
 		goto err;
 	}
 	
-	tx_ring->size = tx_ring->size*sizeof(struct mnic_adv_tx_desc);
+	tx_ring->size = tx_ring->count*sizeof(struct mnic_adv_tx_desc);
 	tx_ring->size = ALIGN(tx_ring->size,4096);
 	
 	tx_ring->desc = dma_alloc_coherent(dev,tx_ring->size,&tx_ring->dma,GFP_KERNEL);
@@ -296,8 +296,8 @@ void mnic_free_rx_resources(struct mnic_ring *rx_ring)
 
 int mnic_setup_rx_resource(struct mnic_ring *rx_ring)
 {
-	struct device *dev = rx_ring->dev;
 	int size;
+	struct device *dev = rx_ring->dev;
 
 	size = sizeof(struct mnic_rx_buffer) * rx_ring->count;
 
@@ -349,6 +349,14 @@ static int mnic_setup_all_rx_resources(struct mnic_adpter *adpter)
 	return err;
 }
 
+static irqreturn_t mnic_msix_ring(int irq,void *data)
+{
+	struct mnic_q_vector *q_vector = (struct mnic_q_vector *)data;
+	
+	napi_schedule(&q_vector->napi);
+
+	return IRQ_HANDLED;
+}
 
 static int mnic_request_msix(struct mnic_adpter *adpter)
 {
@@ -362,23 +370,20 @@ static int mnic_request_msix(struct mnic_adpter *adpter)
 
 	for(i=0;i<adpter->num_q_vectors;i++){
 		struct mnic_q_vector *q_vector = adpter->q_vector[i];
-		vector++;
+		//vector++;
 
 		if(q_vector->rx.ring && q_vector->tx.ring){
 			sprintf(q_vector->name, "%s-TxRx-%u", netdev->name,
 				q_vector->rx.ring->queue_index);
 		}
-
 		else if (q_vector->tx.ring){
 			sprintf(q_vector->name, "%s-tx-%u", netdev->name,
 				q_vector->tx.ring->queue_index);
 		}
-
 		else if (q_vector->rx.ring){
 			sprintf(q_vector->name, "%s-rx-%u", netdev->name,
 				q_vector->rx.ring->queue_index);
 		}
-
 		else{
 			sprintf(q_vector->name, "%s-unused", netdev->name);
 		}
@@ -389,7 +394,8 @@ static int mnic_request_msix(struct mnic_adpter *adpter)
 		}
 	}
 	
-	mnic_configure_msix(adpter);
+	//mnic_configure_msix(adpter);
+
 	return 0;
 
 err_free:
@@ -404,6 +410,7 @@ err_free:
 	}
 	return ret;
 }
+
 static int mnic_request_irq(struct mnic_adpter *adpter)
 {
 	int ret;
@@ -412,13 +419,14 @@ static int mnic_request_irq(struct mnic_adpter *adpter)
 	
 	ret = mnic_request_msix(adpter);
 
-	if(!ret){
+	if(ret==0){
 		//うまくいけばここでおわり
 		goto request_done;
 	}
 	else{
 		pr_info("%s: koko ni kiteha dame!!!!!");
 		pr_info("%s: outihe okeeri!!!");
+		return -1;
 		/*mnic_free_all_tx_resources(adpter);
 		mnic_free_all_rx_resources(adpter);
 
@@ -450,26 +458,33 @@ static int __mnic_open(struct net_device *ndev,bool resuming)
 	struct mnic_adpter *adpter = netdev_priv(ndev);
 	struct pci_dev *pdev = adpter->pdev;
 
+	/*if(!resuming){
+		pm_runtime_get_sync(&pdev->dev);
+	}*/
+
 	netif_carrier_off(ndev);
 	
+	/* allocate transmit descriptors*/
 	ret = mnic_setup_all_tx_resources(adpter);
 	if(ret){
 		goto err_setup_tx;
 	}
 
+	/* allocate receive descriptors*/
 	ret = mnic_setup_all_rx_resources(adpter);
 	if(ret){
 		goto err_setup_rx;
 	}
 
 	//call mnic_desc_unused
-	mnic_alloc_rx_buffers(ring,mnic_desc_unused(ring));
+	//mnic_alloc_rx_buffers(ring,mnic_desc_unused(ring));
 	
 	ret = mnic_request_irq(adpter);
 	if(ret){
 		goto err_req_irq;
 	}
 
+	/* Notify the stack of the actual queue counts.*/
 	ret = netif_set_real_num_tx_queues(adpter->ndev,adpter->num_tx_queues);
 	if(ret){
 		goto err_set_queues;
@@ -484,20 +499,24 @@ static int __mnic_open(struct net_device *ndev,bool resuming)
 		napi_enable(&(adpter->q_vector[i]->napi));
 	}
 
-	mnic_irq_enable(adpter);
+	//mnic_irq_enable(adpter);
 	netif_tx_start_all_queues(ndev);
+	
+	/*if(!resuming){
+		pm_runtime_put(&pdev->dev);
+	}*/
 
 	return 0;
 
 err_set_queues:
 	pr_info("%s:err",__func__);
-	igb_free_irq(adapter);
+	mnic_free_irq(adapter);
 
 err_req_irq:
 	pr_info("%s:err",__func__);
-	igb_release_hw_control(adapter);
-	igb_power_down_link(adapter);
-	igb_free_all_rx_resources(adapter);
+	/*mnic_release_hw_control(adapter);
+	mnic_power_down_link(adapter);*/
+	mnic_free_all_rx_resources(adapter);
 
 err_setup_rx:
 	pr_info("%s:err",__func__);
@@ -673,7 +692,7 @@ static irqreturn_t rx_handler(int irq,void *nic_irq)
 }
 
 //use MSI-X
-static int nettlp_mnic_interrupts(struct nettlp_mnic_adpter *m_adpter)
+/*static int nettlp_mnic_interrupts(struct nettlp_mnic_adpter *m_adpter)
 {
 	//how to register interuppts
 	//1.alloc irq vectors
@@ -705,7 +724,7 @@ NUM_VEC,ret);
 	}
 
 	return 0;
-}
+}*/
 
 static void nettlp_unregister_interrupts(struct nettlp_mnic_adpter *m_adpter)
 {
@@ -793,7 +812,8 @@ static void mnic_set_interrupt_capability(struct mnic_adpter *adpter,bool msix)
 	}
 	
 	ret = pci_enable_msix(adpter->pdev,adpter->msix_entries,numvecs);
-	
+
+	/*If success, return*/	
 	if(ret==0){
 		return;
 	}
@@ -971,6 +991,7 @@ static void mnic_irq_disable(struct mnic_adpter *adpter)
 		synchronize_irq(adpter->msix_entries[i].vector);
 	}	
 }
+
 static int mnic_sw_init(struct mnic_adpter *adpter)
 {
 	uint32_t max_rss_queues;
@@ -1096,6 +1117,7 @@ static void mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 	pr_info("BAR4 %llx is mapped to %p\n",bar4_start,bar4);
 
 	ret = -ENOMEM;
+
 	//allocate ethernet device(struct net_device) and register
 	ndev = allocate_etherdev(sizeof(*adpter));
 	if(!ndev){
@@ -1110,6 +1132,7 @@ static void mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 	adpter = (struct nettlp_mnic_adpter *)netdev_priv(ndev);
 	adpter->ndev = ndev;
 	adpter->pdev = pdev;
+	adpter->msg_enable = netif_msg_init(debug,DEFAULT_MSG_ENABLE);
 	adpter->bar0 = bar0;
 	adpter->bar2 = bar2;	
 	adpter->bar4 = bar4;
@@ -1164,19 +1187,22 @@ static void mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 		goto err7;
 	}
 
-	//initialize tasklet for rx interrupt
+	/*caffier off reporting is important to ethtool even BEFORE open*/
+	netif_carrier_off(ndev);
+
+	/*initialize tasklet for rx interrupt
 	adpter->rx_tasklet = kmalloc(sizeof(struct tasklet_struct),GFP_KERNEL);
 	if(m_adpter->rx_tasklet){
 		ret = -ENOMEM;
 		goto err7;
 	}
-	tasklet_init(m_adpter->rx_tasklet,rx_tasklet,(unsigned long)adpter);
+	tasklet_init(m_adpter->rx_tasklet,rx_tasklet,(unsigned long)adpter);*/
 
-	//register interrupt
+	/* register interrupt
 	ret = nettlp_register_interrupts(adpter);
 	if(ret){
 		goto err8;
-	}
+	}*/
 
 	//initialize the private structure
 	ret = mnic_sw_init(adpter);
@@ -1209,6 +1235,9 @@ static void mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 	m_adpter->bar4->tx->tdt = 0;
 	m_adpter->bar4->rx->rdh = 0;
 	m_adpter->bar4->rx->rdt = 0;*/
+
+	//dev_pm_set_driver_flags(&pdev->dev,DPM_FLAG_NEVER_SKIP);
+	//pm_runtime_put_noidle(&pdev->dev);
 
 	pr_info("%s: probe finished.",__func__);
 	
