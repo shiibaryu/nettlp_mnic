@@ -1,4 +1,28 @@
-union mnic_tx_descriptor{
+/*TX/RX descriptor defines*/
+#define MNIC_DEFAULT_TXD	256
+#define MNIC_MIN_TXD		80
+#define MNIC_MAX_TXD		4096
+
+#define MNIC_DEFAULT_RXD	256
+#define MNIC_MIN_RXD		80
+#define MNIC_MAX_RXD		4096
+
+#define MAX_Q_VECTORS		8
+#define MAX_MSIX_ENTRIES	10
+
+#define MAX_TX_QUEUES		8
+#define MAX_TX_QUEUES		8
+
+/*#define IGB_RX_PTHRESH	((hw->mac.type == e1000_i354) ? 12 : 8)
+#define IGB_RX_HTHRESH	8
+#define IGB_TX_PTHRESH	((hw->mac.type == e1000_i354) ? 20 : 8)
+#define IGB_TX_HTHRESH	1
+#define IGB_RX_WTHRESH	((hw->mac.type == e1000_82576 && \
+			  (adapter->flags & IGB_FLAG_HAS_MSIX)) ? 1 : 4)
+#define IGB_TX_WTHRESH	((hw->mac.type == e1000_82576 && \
+			  (adapter->flags & IGB_FLAG_HAS_MSIX)) ? 1 : 16)*/
+
+union mnic_adv_tx_descriptor{
 	struct {
 		__le64 buffer_addr;//address of descriptor's data buf
 		__le64 cmd_type_len;
@@ -11,7 +35,7 @@ union mnic_tx_descriptor{
 	}wb;
 };
 
-union mnic_rx_descriptor{
+union mnic_adv_rx_descriptor{
 	struct {
 		__le64 pkt_addr; /* Packet buffer address */
 		__le64 hdr_addr; /* Header buffer address */
@@ -56,10 +80,12 @@ struct mnic_tx_register{
 }__attribute__((packed));
 
 struct mnic_bar4{
- 	struct mnic_rx_register *rx;
-	struct mnic_tx_register *tx;	
-	//uint32_t tx_desc_idx;
-	//uint32_t rx_desc_idx;
+	uint64_t tx_desc_base;
+	uint64_t rx_desc_base;
+	
+	uint64_t tx_desc_tail;
+	uint64_t rx_desc_tail;
+
 	uint32_t enabled;
 }__attribute__((packed));
 
@@ -107,7 +133,7 @@ struct rx_queue{
 	volatile union nettlp_mnic_rx_desc *nmrd;
 	uint16_t num_entries;
 	uint16_t rx_index;
-	dma_addr_t rx_desc_paddr;
+	//dma_addr_t rx_desc_paddr;
 	//uint16_t *virtual_addr[];
 	//struct packet_buffer *rx_pool;// buffer pool for packet??
 	//struct packet_buffer *pkt_addr_backup;//save a copy of packet buffer address for writeback descriptor
@@ -120,6 +146,171 @@ struct rx_queue{
 	struct rx_queue *rxq;
 	struct mnic_bar4 mbar4;
 };*/
+
+struct mnic_tx_buffer{
+	struct mnic_adv_tx_desc *next_to_watch;
+	uint16_t time_stamp;
+	struct sk_buff *skb;
+	uint8_t bytecount;
+	uint32_t tx_flags;
+};
+
+struct mnic_rx_buffer{
+	struct mnic_adv_rx_desc *next_to_watch;
+	dma_addr_t dma;
+	struct page *page;
+
+#if (BITS_PER_LONG > 32) || (PAGE_SIZE >= 65536);
+	uint32_t page_offset;
+#else
+	uint16_t page_offset:
+#endif
+	uint16_t pagecnt_bias;
+};
+
+struct mnic_tx_q_stats{
+	uint64_t packets;
+	uint64_t bytes;	
+	uint64_t restart_queue;
+	uint64_t restart_queue2;
+};
+
+struct mnic_rx_q_stats{
+	uint64_t packets;
+	uint64_t bytes;	
+	uint64_t drops;
+	uint64_t csum_err;
+	uint64_t alloc_failed;
+};
+
+struct mnic_ring_container{
+	struct mnic_ring *ring;
+	uint8_t total_bytes;
+	uint8_t total_packets;
+	uint16_t work_limit;
+	uint8_t count;
+	uint8_t itr;
+};
+
+struct mnic_q_vector{
+	struct mnic_adpter *adpter;
+	int cpu;
+	uint32_t eims_value;
+
+	uint16_t itr_val;
+	uint8_t set_itr;
+	void __iomem *itr_register;
+
+	struct mnic_ring_container rx,tx;
+	
+	struct napi_struct napi;
+	struct rcu_head rcu;
+	char name[IFNAMSIZ + 9];
+	
+	struct mnic_ring ring[0] __cacheline_internodealigned_in_smp;
+};
+
+struct mnic_ring{
+	struct mnic_q_vector *q_vector;
+
+	struct net_device *ndev;
+	struct device *dev;
+	union{
+		struct mnic_tx_buffer *tx_buf_info;
+		struct mnic_rx_buffer *rx_buf_info;
+	};
+	void *desc;
+	unsigned long flags;
+	void _iomem *tail;
+	dma_addr_t dma;
+	uint64_t size;
+	uint16_t count;
+	uint8_t queue_idx; //logical index 
+	uint8_t reg_idx; //physical index
+	
+	uint16_t next_to_clean;
+	uint16_t next_to_use;
+	uint16_t next_to_alloc;
+
+	union{
+		struct{
+			struct mnic_tx_queue_stats tx_stats;
+			struct u64_stats_sync tx_syncp;
+			struct u64_stats_stnc tx_syncp2;
+		};
+		struct{
+			struct sk_buff *skb;
+			struct mnic_tx_queue_stats rx_stats;
+			struct u64_stats_sync rx_syncp;
+		};
+		
+	}
+} __cacheline_internodealigned_in_smp;
+
+struct mnic_adpter{
+	struct pci_devi *pdev;
+	struct net_device *ndev;
+	
+	struct mnic_bar0 *bar0;
+	struct mnic_bar4 *bar4;
+	void *bar2;
+
+	uint16_t state;
+	uint8_t flags;
+	
+	uint8_t num_q_vectors;
+	struct msix_entry msix_entries[MAX_MSIX_ENTRIES];
+
+	uint32_t tx_itr_setting;
+	uint32_t rx_itr_setting;
+	uint16_t tx_itr;
+	uint16_t rx_itr;
+
+	uint16_t tx_work_limit;
+	uint32_t tx_timeout_count;
+	uint8_t num_tx_queus;
+	struct mnic_ring *tx_ring[16];
+	
+	uint8_t num_rx_queue;
+	struct mnic_ring *rx_ring[16];
+
+	uint32_t max_frame_size;
+	uint32_t min_frame_size;
+
+	uint8_t __iomem *io_addr;
+
+	struct mnic_q_vector *q_vector[MAX_Q_VECTORS];
+	
+	uint16_t tx_ring_count;
+	uint16_t rx_ring_count;
+
+	spinlock_t tx_lock;
+	spinlock_t rx_lock;
+	spinlock_t stats64_lock;
+
+	struct tasklet_struct *rx_tasklet;
+	struct napi_struct napi;
+
+	//uint8_t msg_enable;
+	uint8_t napi_enabled;
+	uint32_t rss_queus;
+	//struct tx_queue *txq;
+	//struct rx_queue *rxq;
+
+	//struct pkt_buffer *tx_buf;
+	//struct pkt_buffer *rx_buf;
+#define TX_STATE_READY 1
+#define RX_STATE_BUSY  2
+
+	//uint32_t tx_state;	
+	//uint8_t  napi_enabled;
+};
+
+#define MNIC_TX_DESC(R,i)	\
+	(&(((union mnic_adv_tx_desc *)((R)->desc))[i]))
+
+#define MNIC_RX_DESC(R,i)	\
+	(&(((union mnic_adv_rx_desc *)((R)->desc))[i]))
 
 #define mnic_get_mac(dst, src) do {			\
 		dst[0] = src[5];		\

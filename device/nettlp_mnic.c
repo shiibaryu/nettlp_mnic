@@ -26,6 +26,10 @@ struct mnic_device{
 	uintptr_t rx_desc_base;
 
 	struct nettlp *rx_nt; 
+	struct nettlp_msix tx_irq,rx_irq;
+
+	struct mnic_rx_descriptor *rx_desc;
+	struct mnic_tx_descriptor *tx_desc;
 
 };
 
@@ -91,7 +95,28 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mr,void *m,size_t count
 	dma_addr = tlp_mr_addr(mh);
 	info("dma addr is %lx\n",mh);
 	
-	
+	if(is_mwr_addr_tx_desc_ptr(mnic->bar4_start,dma_addr)){
+		memcpy(&mnic->tx_desc_base,m,8);
+		info("TX desc base is %lx",mnic->tx_desc_base);
+	}
+	else if(is_mwr_addr_rx_desc_ptr(mnic->bar4_start,dma_addr)){
+		memcpy(&mnic->rx_desc_base,m,8);
+		info("RX desc base is %lx",mnic->rx_desc_base);
+	}
+	else if(is_mwr_addr_tx_tail_ptr(mnic->bar4_start,dma_addr)){
+		if(mnic->tx_desc_base == 0){
+			debug("tx desc base is NULL");
+			goto tx_end;
+		}
+
+	}
+	else if(is_mwr_addr_rx_tail_ptr(mnic->bar4_start,dma_addr)){
+		if(mnic->rx_desc_base == 0){
+			debug("rx desc base is NULL");
+			goto rx_end;
+		}
+
+	}
 }
 
 void *nettlp_mnic_tap_read_thread(void *arg)
@@ -235,20 +260,34 @@ int main(int argc,char **argv)
 		}
 	}
 		
-	mnic.tap_fd = tap_fd;
-	//how to get bar ??
+	mnic.tx_desc = malloc(sizeof(struct mnic_tx_descriptor)*TX_QUEUE_ENTRIES);
+	mnic.rx_desc = malloc(sizeof(struct mnic_rx_descriptor)*RX_QUEUE_ENTRIES);
+	memset(mnic.tx_desc,0,sizeof(struct mnic_tx_descriptor);
+	memset(mnic.rx_desc,0,sizeof(struct mnic_rx_descriptor);
 
-	/*if(snic.bar4_start == 0){
+
+	mnic.fd = tap_fd;
+	mnic.bar4_start = nettlp_msg_get_bar4_start(host);	
+	if(snic.bar4_start == 0){
 		debug("failed to get BAR4 addr from %s\n",inet_ntoa(host));
 		info("nettlp_msg_get_bar4_start");
 		return -1;
 	}
+
 	ret = nettlp_msg_get_msix_table(host,msix,2);
 	if(ret < 0){
 		debug("faled to get msix table from %s\n",inet_ntoa(host));
 		info("nettlp_msg_get_msix_table");
-	}*/	
-       
+	}	
+
+	mnic.tx_irq = msix[0];
+	mnic.rx_irq = msix[1];
+
+	info("Device is %04x",nt.requester);
+	info("BAR4 start adress is %#lx",mnic.bar4_start);	       
+	info("TX IRQ address is %#lx,data is 0x%08x",mnic.tx_irq.addr,mnic.tx_irq.data);
+	info("RX IRQ address is %#lx,data is 0x%08x",mnic.rx_irq.addr,mnic.rx_irq.data);
+
 	if(signal(SIGINT,signal_handler)==SIG_ERR){
 		debug("failed to set signal");
 		return -1;
