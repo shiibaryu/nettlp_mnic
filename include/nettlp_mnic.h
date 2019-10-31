@@ -248,7 +248,7 @@ struct mnic_ring{
 	}
 } __cacheline_internodealigned_in_smp;
 
-struct mnic_adpter{
+struct mnic_adapter{
 	struct pci_devi *pdev;
 	struct net_device *ndev;
 	
