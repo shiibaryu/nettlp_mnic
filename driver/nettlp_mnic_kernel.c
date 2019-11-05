@@ -452,6 +452,40 @@ request_done:
 	return ret;
 }
 
+
+static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector)
+{
+	struct mnic_adapter *adapter = q_vector->adapter;
+	struct mnic_ring *tx_ring = q_vector->tx.ring;
+	struct mnic_tx_buffer *tx_buff;
+	struct mnic_adv_tx_desc *tx_desc;
+	uint16_t total_bytes = 0,total_packets = 0;
+	uint16_t budget = q_vector->tx.work_limit;
+	uint16_t i = tx_ring->next_to_clean;
+}
+
+static int mnic_poll(struct napi_struct *napi,int budget)
+{
+	bool clean_complete = true;
+	struct mnic_q_vector *q_vector = container_of(napi,struct mnic_q_vector,napi);
+	
+	if(q_vector->tx.ring){
+		clean_complete = mnic_clean_tx_irq(q_vector);
+	}
+	if(q_vector->rx.ring){
+		clean_complete &= mnic_clean_rx_irq(q_vector);
+	}
+
+	if(!clean_complete){
+		return budget;
+	}
+	
+	napi_complete(napi);
+	mnic_ring_irq_enable(q_vector);
+
+	return 0;
+}
+
 static int __mnic_open(struct net_device *ndev,bool resuming)
 {
 	int ret,i;
@@ -534,6 +568,130 @@ static int mnic_open(struct net_device *ndev)
 	return __mnic_open(ndev,false);
 }
 
+void mnic_unmap_and_free_tx_resource(struct igb_ring *ring,
+				    struct igb_tx_buffer *tx_buffer)
+{
+	if (tx_buffer->skb) {
+		dev_kfree_skb_any(tx_buffer->skb);
+		if (dma_unmap_len(tx_buffer, len))
+			dma_unmap_single(ring->dev,
+					 dma_unmap_addr(tx_buffer, dma),
+					 dma_unmap_len(tx_buffer, len),
+					 DMA_TO_DEVICE);
+	} else if (dma_unmap_len(tx_buffer, len)) {
+		dma_unmap_page(ring->dev,
+			       dma_unmap_addr(tx_buffer, dma),
+			       dma_unmap_len(tx_buffer, len),
+			       DMA_TO_DEVICE);
+	}
+	tx_buffer->next_to_watch = NULL;
+	tx_buffer->skb = NULL;
+	dma_unmap_len_set(tx_buffer, len, 0);
+	/* buffer_info must be completely set up in the transmit path */
+}
+
+static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer first,const uint8_t hdr_len)
+{
+	struct sk_buff *skb = first->skb;
+	struct mnic_tx_buffer *tx_buff;
+	struct mnic_adv_tx_desc *tx_desc;
+	struct skb_frag_struct *frag;
+	dma_addr_t dma;
+	unsigned int data_len,size;
+	uint32_t tx_flags = first->tx_flags;
+	uint16_t i = tx_ring->next_to_use;
+	
+	tx_desc = MNIC_TX_DESC(tx_ring,i);
+	size = skb_headlen(skb);
+	data_len = skb->data_len;
+
+	dma = dma_map_single(tx_ring->dev,skb->data,size,DMA_TO_DEVICE);
+	tx_buff = first;
+
+	for(frag = &skb_shinfo(skb)->frag[0];;frag++){
+		if(dma_mapping_error(tx_ring->dev,skb->data,size,DMA_RO_DEVICE)){
+			goto dma_error;
+		}
+		
+		dma_unmap_len_set(tx_buff,len.size);
+		dma_unmap_addr_set(tx_buff,dma,dma);
+	
+		tx_desc->read.buffer_addr = cpu_to_le64(dma);
+		
+		while(unlikely(size > MNIC_MAX_DATA_PER_TXD)){
+			//tx_desc->read.cmd_type_len = cpu_to_le32(cmd_type ^ MNIC_MAX_DATA_PER_TXD);
+			i++;
+			tx_desc++;
+	
+			if(i == tx_ring->count){
+				tx_desc = MNIC_TX_DESC(tx_ring,0);
+				i = 0;
+			}
+			
+			tx_desc->read.olinfo_status = 0;
+			
+			dma += MNIC_MAX_DATA_PER_TXD;
+			size -= MNIC_MAX_DATA_PER_TXD;
+
+			tx_desc->read.buffer_addr = cpu_to_le64(dma);
+		}
+	
+		if(likely(!data_len)){
+			break;
+		}
+
+		tx_desc->read.cmd_type_len = cpu_to_le64(cmd_type ^ size);
+
+		i++;
+		tx_desc++;
+		if(i == tx_ring->count){
+			tx_desc = MNIC_TX_DESC(tx_ring,0);
+			i=0;
+		}
+		tx_desc->read.olinfo_status = 0;
+		
+		size = skb_frag_size(frag);
+		data_len -= size;
+		
+		dma = skb_frag_dma_map(tx_ring->dev,frag,0,size,DMA_TO_DEVICE);
+		tx_buff = &tx_ring->tx_buffer_info[i];
+	}
+
+	netdev_tx_sent_queue(txring_txq(tx_ring),first->bytecount);
+
+	wmb();
+
+	first->next_to_watch = tx_desc;
+
+	i++;
+	if(tx_ring->count == i){
+		i=0;
+	}
+	
+	tx_ring->next_to_use = i;
+
+	//bar4の構造体のtxdにtx_tailをとうろく
+
+	mmiowb();
+
+dma_error:
+	dev_err(tx_ring->dev, "TX DMA map failed\n");
+
+	/* clear dma mappings for failed tx_buffer_info map */
+	for (;;) {
+		tx_buffer = &tx_ring->tx_buffer_info[i];
+		mnic_unmap_and_free_tx_resource(tx_ring, tx_buffer);
+		if (tx_buffer == first)
+			break;
+		if (i == 0)
+			i = tx_ring->count;
+		i--;
+	}
+
+	tx_ring->next_to_use = i;
+
+}
+
 static int nettlp_mnic_stop(struct net_device *ndev)
 {
 	pr_info("%s\n",__func__);
@@ -547,14 +705,44 @@ static int nettlp_mnic_stop(struct net_device *ndev)
 	return 0;
 }
 
-static netdev_tx_t mnic_xmit_frame_ring(struct sk_buff *skb,struct net_device *dev)
+static netdev_tx_t mnic_xmit_frame_ring(struct sk_buff *skb,struct mnic_ring *tx_ring)
 {
 	pr_info("%s\n",__func__);
-	struct mnic_tx_buffer *first;
+
+	struct mnic_tx_buffer *tx_buff;
 	uint32_t flags;
 	uint32_t count = TXD_USE_COUNT(skb_headlen(skb));
-	uint8_t hdr_len = 0;	
+	uint8_t hdr_len = 0;
+
+	tx_buff = &tx_ring->tx_buffer_info[tx_ring->next_to_use];
+	tx_buff->skb = skb;
+	tx_buff->bytecount = skb->len;	
+	tx_buff->gso_segs = 1;
+	//tx_buff->tx_flags = tx_flags;
+	//tx_buff->protocol = protocol;
 	
+	mnic_tx_map(tx_ring,tx_buff,hdr_len);
+	
+	mnic_maybe_stop_tx(tx_ring,DESC_NEEDED);
+
+	return NETDEV_TX_OK;
+}
+
+static inline struct mnic_ring *mnic_tx_queue_mapping(struct mnic_adapter *adapter,struct sk_buff *skb)
+{
+	uint16_t r_idx = skb->queue_mapping;
+	
+	if(r_idx >= adapter->num_tx_queue){
+		r_idx = r_idx % adapter->num_tx_queues;
+	}
+
+	pr_info("%s: queue mapping is %d\n",__func__,r_idx);
+	return adapter->tx_ring[r_idx];
+}
+static netdev_tx_t nettlp_mnic_xmit_frame(struct sk_buff *skb,struct net_device *netdev)
+{
+	struct mnic_adapter *adapter = netdev_priv(netdev);
+	return mnic_xmit_frame_ring(skb,mnic_tx_queue_mapping(adapter,skb));	
 }
 
 static int nettlp_mnic_set_mac(struct net_device *ndev,void *p)
@@ -577,7 +765,7 @@ static const struct net_device_ops nettlp_mnic_ops = {
 	.ndo_uninit		= nettlp_mnic_uninit,
 	.ndo_open		= nettlp_mnic_open, 
 	.ndo_stop		= nettlp_mnic_stop,
-	.ndo_start_xmit 	= nettlp_mnic_xmit,
+	.ndo_start_xmit 	= nettlp_mnic_xmit_frame,
 	.ndo_get_stats  	= ip_tunnel_get_stats64,
 	.ndo_change_mtu 	= eth_change_mtu,
 	.ndo_validate_addr 	= eth_validate_addr,
