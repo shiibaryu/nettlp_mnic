@@ -2,6 +2,8 @@
 #define MNIC_DEFAULT_TXD	256
 #define MNIC_MIN_TXD		80
 #define MNIC_MAX_TXD		4096
+#define MNIC_MAX_TXD_PWR	15
+#define MNIC_MAX_DATA_PER_TXD   (1u << MNIC_MAX_TXF_PWR)
 
 #define MNIC_DEFAULT_RXD	256
 #define MNIC_MIN_RXD		80
