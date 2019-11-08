@@ -7,7 +7,29 @@
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <net/ip_tunnels.h>
-
+#include <linux/types.h>
+#include <linux/init.h>
+#include <linux/bitops.h>
+#include <linux/vmalloc.h>
+#include <linux/pagemap.h>
+#include <linux/netdevice.h>
+#include <linux/ipv6.h>
+#include <linux/slab.h>
+#include <net/checksum.h>
+#include <net/ip6_checksum.h>
+#include <linux/net_tstamp.h>
+#include <linux/mii.h>
+#include <linux/ethtool.h>
+#include <linux/if.h>
+#include <linux/pci-aspm.h>
+#include <linux/delay.h>
+#include <linux/interrupt.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <linux/sctp.h>
+#include <linux/aer.h>
+#include <linux/prefetch.h>
+#include <linux/pm_runtime.h>
 #include <nettlp_mnic_driver.h>
 #include "nettlp_msg.h"
 
@@ -539,6 +561,74 @@ static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector)
 	return !!budget;
 }
 
+
+static bool mnic_is_non_eop(struct mnic_ring *rx_ring,struct mnic_adv_rx_desc *rx_desc)
+{
+	u32 ntc = rx_ring->next_to_clean + 1;
+	
+	ntc = (ntc < rx_ring->count) ? ntc : 0;
+	rx_ring->next_to_clean = ntc;
+	
+	prefetch(MNIC_RX_DESC(rx_ring,ntc));
+	
+	if(likely(mnic_test_staterr(rx_desc,MNIC_RXD_STAT_EOP))){
+		return false;
+	}
+	
+	return true;
+}
+
+static void mnic_pull_tail(struct mnic_ring *rx_ring,)
+{
+	unsigned char *vaddr;
+	unsigned int pull_len;
+	struct skb_frag_struct *frag = &skb_shinfo(skb)->frags[0];
+
+	vaddr = skb_frag_address(frag);
+	
+	/*
+	we need the header to contain the greater of either ETH_HLEN or 
+	60 bytes if the skb->len is less than 60 for skb_pad
+	*/
+	pull_len = eth_get_headlen(vaddr,MNIC_RX_HDR_SIZE);
+
+	/*align pull length to size of long to optimize memcpy performance*/
+	skb_copy_to_linear_data(skb,va,ALIGN(pull_len,sizeof(long)));
+	
+	/*update all of the pointers*/
+	skb_frag_size_sub(frag,pull_len);
+	frag->page_offset += pull_len;
+	skb->data_len -= pull_len;
+	skb->tail += pull_len;
+	
+}
+static bool mnic_cleanup_headers(struct mnic_ring *rx_ring,struct mnic_adv_rx_desc *rx_desc,struct sk_buff *skb)
+{
+	if(unlikely((mnic_test_staterr(rx_desc,MNIC_RXDEXT_ERR_FRAME_ERR_MASK)))){
+		struct net_device *ndev = rx_ring->ndev;
+		if(!(ndev->features & NETIF_F_RXALL)){
+			dev_kfree_skb_any(skb);
+			return true;
+		}
+	}
+
+	/*place header in linear portion of buffer*/
+	if(skb_is_nonlinear(skb)){
+		mnic_pull_tail(rx_ring,rx_desc,skb);
+	}
+
+	if(unlikely(skb->len < 60)){
+		int pad_len = 60 - skb->len;	
+		
+		if(skb_pad(skb,pad_len)){
+			return true;
+		}
+		__skb_put(skb,pad_len);
+	}
+	
+	return false;
+}
+
 static bool mnic_alloc_mapped_page(struct mnic_ring *rx_ring,struct mnic_rx_buffer *rb)
 {
 	struct page *page = rb->page;
@@ -565,7 +655,7 @@ static bool mnic_alloc_mapped_page(struct mnic_ring *rx_ring,struct mnic_rx_buff
 
 	rb->dma = dma;
 	rb->page = page;
-	rb^>page_offset = 0;
+	rb->page_offset = 0;
 		
 	return true;
 }
@@ -726,6 +816,8 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 			cleaned_count = 0;			
 		}
 
+		dma_rmb();
+
 		rx_desc = MNIC_RX_DESC(rx_ring,rx_ring->next_to_clean);
 		
 		skb = mnic_fetch_rx_buffer(rx_ring,rx_desc,skb);
@@ -738,8 +830,36 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 		if(mnic_is_non_eop(rx_ring,rx_desc)){
 			continue;
 		}
+		if(mnic_cleanup_headers(rx_ring,rx_desc,skb)){
+			skb = NULL;
+			continue;
+		}
 		
+		total_bytes += skb->len;
+		//mnic_process_skb_fields(rx_ring,rx_desc,skb);
+	
+		skb->protocol = eth_type_trans(skb,rx_ring->ndev);
+		skb->ip_summed = CHECKSUM_NONE;
+
+		napi_gro_receive(&q_vector->napi,skb);
+
+		skb = NULL;
+		
+		total_packets++;
 	}
+	
+	rx_ring->skb = skb;
+	rx_ring->rx_stats.packets += total_packets;
+	rx_ring->rx_stats,bytes += total_bytes;
+	
+	q_vector->rx.total_packets += total_packets;
+	q_vector->rx.total_bytes += total_bytes;
+
+	if(cleaned_count){
+		mnic_alloc_rx_buffers(rx_ring,cleaned_count);
+	}
+	
+	return (total_packets < budget);
 }	
 
 
