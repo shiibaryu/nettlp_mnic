@@ -16,6 +16,12 @@
 #define MAX_TX_QUEUES		8
 
 #define MNIC_DEFAULT_ITR	3
+
+#define MNIC_RX_BUFFER_WRITE	16
+
+#define MNIC_RX_HDR_LEN		256
+#define MNIC_RX_BUFSZ		2048
+
 /*#define IGB_RX_PTHRESH	((hw->mac.type == e1000_i354) ? 12 : 8)
 #define IGB_RX_HTHRESH	8
 #define IGB_TX_PTHRESH	((hw->mac.type == e1000_i354) ? 20 : 8)
@@ -308,6 +314,14 @@ struct mnic_adapter{
 	//uint32_t tx_state;	
 	//uint8_t  napi_enabled;
 };
+
+static inline int mnic_desc_unused(struct mnict_ring *ring)
+{
+	if (ring->next_to_clean > ring->next_to_use)
+		return ring->next_to_clean - ring->next_to_use - 1;
+
+	return ring->count + ring->next_to_clean - ring->next_to_use - 1;
+}
 
 #define MNIC_TX_DESC(R,i)	\
 	(&(((union mnic_adv_tx_desc *)((R)->desc))[i]))

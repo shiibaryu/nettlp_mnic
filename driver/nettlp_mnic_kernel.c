@@ -101,7 +101,7 @@ static int nettlp_mnic_open(struct net_device *ndev)
 
 static void mnic_clean_tx_ring(struct mnic_ring *tx_ring)
 {
-	uint16_t i = tx_ring->next_to_clean;
+	uint32_t i = tx_ring->next_to_clean;
 	struct mnic_tx_buffer *tx_buffer = &tx_ring->tx_buffer_info[i];
 
 	while (i != tx_ring->next_to_use) {
@@ -190,7 +190,8 @@ static int mnic_setup_tx_resource(struct mnic_ring *tx_ring)
 	int size;
 	struct device *dev = tx_ring->dev;
 	struct mnic_adapter *adapter = netdev_priv(dev);
-
+	
+	//tx_ring->count = MNIC_DEFAULT_TXD;
 	size = sizeof(struct mnic_tx_buffer)*tx_ring->count;
 	
 	tx_ring->tx_buffer_info = vmalloc(size);
@@ -244,7 +245,7 @@ static int mnic_setup_all_tx_resources(struct mnic_adapter *adapter)
 
 static void mnic_clean_rx_ring(struct mnic_ring *rx_ring)
 {
-	uint16_t i = rx_ring->next_to_clean;
+	uint32_t i = rx_ring->next_to_clean;
 	dev_kfree_skb(rx_ring->skb);
 	rx_ring->skb = NULL;
 
@@ -305,6 +306,8 @@ int mnic_setup_rx_resource(struct mnic_ring *rx_ring)
 	struct device *dev = rx_ring->dev;
 	struct mnic_adapter *adapter = netdev_priv(dev);
 
+	//rx_ring->count = MNIC_DEFAULT_RXD;
+
 	size = sizeof(struct mnic_rx_buffer) * rx_ring->count;
 
 	rx_ring->rx_buffer_info = vmalloc(size);
@@ -324,7 +327,7 @@ int mnic_setup_rx_resource(struct mnic_ring *rx_ring)
 	}
 
 	/*notify rx descriptor address*/
-	adapter->bar4->rx_desc_base = rx_ring->dma;
+	//adapter->bar4->rx_desc_base = rx_ring->dma;
 
 	rx_ring->next_to_alloc = 0;
 	rx_ring->next_to_clean = 0;
@@ -468,9 +471,9 @@ static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector)
 	struct mnic_ring *tx_ring = q_vector->tx.ring;
 	struct mnic_tx_buffer *tx_buff;
 	struct mnic_adv_tx_desc *tx_desc;
-	uint16_t total_bytes = 0,total_packets = 0;
-	uint16_t budget = q_vector->tx.work_limit;
-	uint16_t i = tx_ring->next_to_clean;
+	uint32_t total_bytes = 0,total_packets = 0;
+	uint32_t budget = q_vector->tx.work_limit;
+	uint32_t i = tx_ring->next_to_clean;
 
 	tx_buffer = &tx_ring->tx_buffer_info[i];
 	tx_desc = IXGBE_RING(tx_ring,i);
@@ -508,18 +511,18 @@ static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector)
 			}
 
 			if(dma_unmap_len(tx_buffer,len)){
-				dma_unmap_page(tx_buffer,dma,dma_unmap_addr(tx_buffer,dma),dma_unmap_len(tx_buffer,len),DMA_TO_DEVICE);
+				dma_unmap_page(tx_ring->dev,dma_unmap_addr(tx_buffer,dma),dma_unmap_len(tx_buffer,len),DMA_TO_DEVICE);
 				dma_unmap_len_set(tx_buffer,len,0);
 			}
 		}
 
-		/*move us one more past the eop_desc for prefeth*/		
+		/*move us one more past the eop_desc for prefeth*/
 		tx_buffer++;
 		tx_desc++;
 		i++;
 
 		if(unlikely(!i)){
-			i -= tx_ring->tx_buffer_info;
+			i -= tx_ring->count;
 			tx_buffer = tx_ring->tx_buffer_info;
 			tx_desc = MNIC_TX_DESC(tx_ring,0);
 		}
@@ -530,15 +533,225 @@ static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector)
 		budget--;
 	}while(likely(budget));
 
-
+	i += tx_ring->count;
+	tx_ring->next_to_clean = i;
+	
 	return !!budget;
 }
+
+static bool mnic_alloc_mapped_page(struct mnic_ring *rx_ring,struct mnic_rx_buffer *rb)
+{
+	struct page *page = rb->page;
+	dma_addr_t dma;
+	
+	//finish this function if we already have page
+	if(likely(page)){
+		return true;
+	}
+	
+	page = __skb_alloc_page(GFP_ATOMIC | __GFP_COLD,NULL);
+	if(unlikely(!page)){
+		pr_info("%s: failed to alloc page\n",__func__);
+		return false;
+	}
+	
+	dma = dma_map_page(rx_ring->dev,page,0,PAGE_SIZE,DMA_FROM_DEVICE);
+
+	if(dma_mapping_error(rx_ring->dev,dma)){
+		__free_page(page);
+		pr_info("%s: failed to map page\n",__func__);
+		return false;
+	}
+
+	rb->dma = dma;
+	rb->page = page;
+	rb^>page_offset = 0;
+		
+	return true;
+}
+
+void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count)
+{
+	struct mnic_adv_rx_desc *rx_desc;
+	struct mnic_rx_buffer *rb;
+	uint16_t i = rx_ring->next_to_use;
+
+	if(!cleaned_count){
+		return;
+	}
+
+	rx_desc = MNIC_RX_DESC(rx_ring,i);
+	rb = &rx_ring->rx_buffer_info[i];
+	i -= rx_ring->count;
+
+	do{
+		if(!mnic_alloc_mapped_page(rx_ring,rb)){
+			break;
+		}
+
+		rx_desc->read.pkt_addr = cpu_to_le64(rb->dma + rb->page_offset);
+		
+		rx_desc++;
+		rb++;
+		i++;
+	
+		if(unlikely(!i)){
+			rx_desc = MNIC_RX_DESC(rx_ring,0);
+			rb = rx_ring->buffer_info;
+			i -= rx_ring->count;
+		}
+
+		rx_desc->read.hdr_addr = 0;		
+		cleaned_count--;	
+	}while(cleaned_count);
+
+	i += rx_ring->count;
+	
+	if(i != rx_ring->next_to_use){
+		rx_ring->next_to_use = i;
+		rx_ring->next_t_alloc = i;
+
+		//set tail	
+		adapter->bar4->rx_desc->tail = i;
+	}
+}
+
+static bool mnic_can_reuse_rx_page(struct mnic_rx_buffer *rx_buffer,struct page *page,unsigned int truesize)
+{
+	if(unlikey(page_to_nid(page) != numa_node_id())){
+		return false;
+	}
+
+#if (PAGE_SIZE < 8192)
+	//if we are only owner of page we can reuse it
+	if(unlikely(page_count(page) != 1)){
+		return false;
+	}	
+	
+	//flip page offset to other buffer
+	rx_buffer->page_offset ^= MNIC_RX_BUFSZ;
+
+	atomic(&page->_count,2);
+#else
+	//move offset up to the next cache line
+	rx_buffer->page_offset += truesize;
+	if(rx_buffer->page_offset > (PAGE_SIZE - MNIC_RX_BUFSZ)){
+		return false;
+	}
+	
+	get_page(page);
+#endif
+	return true;
+}
+
+static bool mnic_add_rx_frag(struct mnic_ring *mnic_ring,struct mnic_rx_buffer *rx_buffer,struct mnic_adv_rx_desc *rx_desc,struct *skb)
+{
+	struct page *page = rx_buffer->page;
+	//uint32_t size = le16_to_cpu(rx_desc->wb.upper.length);
+	uint32_t size = 2048 /*2048でほんとにいいのか問題*/
+#if (PAGE_SIZE < 8192)
+	unsigned int truesize = MNIC_RX_BUFSZ;
+#else
+	unsigned int truesize = ALIGN(size,L1_CACHE_BYTES);
+#endif
+
+	if((size <= MNIC_RX_HDR_LEN) && !skb_is_nonlinear(skb)){
+		unsigned char *vaddr = page_address(page) + rx_buffer->page_offset;
+
+		memcpy(__skb_put(skb,size),va,ALIGN(size,sizeof(long)));
+
+		if(likely(page_to_nid(page) == numa_node_id())){
+			return true;
+		}
+	
+		put_page(page);
+		return false;
+	}
+
+	//for fragmentation
+	skb_add_rx_frag(skb,skb_shinfo(skb)->nr_frags,page,rx_buffer->page_offset,size,truesize);
+
+	return mnic_can_reuse_rx_page(rx_buffer,page,truesize);  
+}
+
+static struct sk_buff *mnic_fetch_rx_buffer(struct mnic_ring *rx_ring,struct mnic_adv_rx_desc *rx_desc,struct sk_buff *skb)
+{
+	struct page *page;
+	struct mnic_rx_buffer *rx_buffer = &rx_ring->rx_buffer_info[ring->next_to_clean];
+	
+	page = rx_buffer->page;
+	prefetchw(page);
+
+	if(likely(!skb)){
+		void *page_addr = page_address(page) + rx_buffer->page_offset;
+		prefetch(page_addr);
+
+		//allocate a skbuff for rx on a specific device and and align ip
+		skb = netdev_alloc_skb_ip_align(rx_ring->ndev,MNIC_RX_HDR_LEN);
+		if(unlikely(!skb)){
+			return NULL;
+		}
+		
+		prefetchw(skb->data);
+	}
+	
+	/*we are reusing so sync this buffer for cpu use*/
+	/*in order for the CPU and devices to see the most up-to-date and correct copy of the DMA buffer*/
+	dma_sync_single_range_for_cpu(rx_ring->dev,rx_buffer->dma,rx_buffer->page_offset,MNIC_RX_BUFSZZ,DMA_FROM_DEVICE);
+	
+	if(mnic_add_rx_frag(rx_ring,rx_buffer,rx_desc,skb)){
+		mnic_reuse_rx_page(rx_ring,rx_buffer);
+	}
+	else{
+		dma_unmap_page(rx_ring->dev,rx_buffer->dma,PAGE_SIZE,DMA_FROM_DEVICE);
+	}
+
+	rx_buffer->page = NULL;
+	
+	return skb;
+}
+
+static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
+{
+	struct mnic_ring *rx_ring = q_vector->rx.ring;
+	struct sk_buff *skb = rx_ring->skb;
+	uint32_t total_bytes = 0,total_packets = 0;
+	uint16_t cleaned_count = mnic_desc_unused(rx_ring); 
+
+	while(likely(total_packets < budget)){
+		struct mnic_adv_rx_desc *rx_desc;
+
+		if(cleaned_count >= MNIC_RX_BUFFER_WRITE){
+			mnic_alloc_rx_buffer(rx_ring,cleaned_count);
+			cleaned_count = 0;			
+		}
+
+		rx_desc = MNIC_RX_DESC(rx_ring,rx_ring->next_to_clean);
+		
+		skb = mnic_fetch_rx_buffer(rx_ring,rx_desc,skb);
+		if(!skb){
+			break;
+		}
+		
+		cleaned_count++;
+		
+		if(mnic_is_non_eop(rx_ring,rx_desc)){
+			continue;
+		}
+		
+	}
+}	
+
 
 static int mnic_poll(struct napi_struct *napi,int budget)
 {
 	bool clean_complete = true;
 	struct mnic_q_vector *q_vector = container_of(napi,struct mnic_q_vector,napi);
-	
+
+#ifdef CONFIG_MNIC_DCA
+	mnic_update_dca(q_vector);
+#endif
+
 	if(q_vector->tx.ring){
 		clean_complete = mnic_clean_tx_irq(q_vector);
 	}
@@ -581,7 +794,10 @@ static int __mnic_open(struct net_device *ndev,bool resuming)
 	}
 
 	//call mnic_desc_unused
-	//mnic_alloc_rx_buffers(ring,mnic_desc_unused(ring));
+	for(i=0;i<adapter->num_rx_queues;i++){
+		struct mnic_ring *rx_ring = adapter->rx_ring[i];
+		mnic_alloc_rx_buffers(ring,mnic_desc_unused(ring));
+	}
 	
 	ret = mnic_request_irq(adapter);
 	if(ret){
@@ -729,7 +945,7 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer first,con
 
 	netdev_tx_sent_queue(txring_txq(tx_ring),first->bytecount);
 
-	wmb();
+	//wmb();
 
 	first->next_to_watch = tx_desc;
 
@@ -742,7 +958,7 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer first,con
 	//bar4の構造体のindexにtx_tailをとうろく
 	adapter->bar4->tx_desc_tail = i;
 	
-	mmiowb();
+	//mmiowb();
 
 dma_error:
 	dev_err(tx_ring->dev, "TX DMA map failed\n");
@@ -800,7 +1016,7 @@ static netdev_tx_t mnic_xmit_frame_ring(struct sk_buff *skb,struct mnic_ring *tx
 
 static inline struct mnic_ring *mnic_tx_queue_mapping(struct mnic_adapter *adapter,struct sk_buff *skb)
 {
-	uint16_t r_idx = skb->queue_mapping;
+	uint32_t r_idx = skb->queue_mapping;
 	
 	if(r_idx >= adapter->num_tx_queue){
 		r_idx = r_idx % adapter->num_tx_queues;
