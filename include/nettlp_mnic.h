@@ -22,6 +22,25 @@
 #define MNIC_RX_HDR_LEN		256
 #define MNIC_RX_BUFSZ		2048
 
+#define MNIC_RXD_STAT_EOP	0x02
+
+#define MNIC_RXDEXT_STATERR_LB    0x00040000
+#define MNIC_RXDEXT_STATERR_CE    0x01000000
+#define MNIC_RXDEXT_STATERR_SE    0x02000000
+#define MNIC_RXDEXT_STATERR_SEQ   0x04000000
+#define MNIC_RXDEXT_STATERR_CXE   0x10000000
+#define MNIC_RXDEXT_STATERR_TCPE  0x20000000
+#define MNIC_RXDEXT_STATERR_IPE   0x40000000
+#define MNIC_RXDEXT_STATERR_RXE   0x80000000
+
+/* Same mask, but for extended and packet split descriptors */
+#define MNIC_RXDEXT_ERR_FRAME_ERR_MASK ( \
+    MNIC_RXDEXT_STATERR_CE  |            \
+    MNIC_RXDEXT_STATERR_SE  |            \
+    MNIC_RXDEXT_STATERR_SEQ |            \
+    MNIC_RXDEXT_STATERR_CXE |            \
+    MNIC_RXDEXT_STATERR_RXE)
+
 /*#define IGB_RX_PTHRESH	((hw->mac.type == e1000_i354) ? 12 : 8)
 #define IGB_RX_HTHRESH	8
 #define IGB_TX_PTHRESH	((hw->mac.type == e1000_i354) ? 20 : 8)
@@ -29,7 +48,8 @@
 #define IGB_RX_WTHRESH	((hw->mac.type == e1000_82576 && \
 			  (adapter->flags & IGB_FLAG_HAS_MSIX)) ? 1 : 4)
 #define IGB_TX_WTHRESH	((hw->mac.type == e1000_82576 && \
-			  (adapter->flags & IGB_FLAG_HAS_MSIX)) ? 1 : 16)*/
+			  (adapter->flags & IGB_FLAG_HAS_MSIX)) ? 1 : 16)
+*/
 
 union mnic_adv_tx_descriptor{
 	struct {
@@ -321,6 +341,11 @@ static inline int mnic_desc_unused(struct mnict_ring *ring)
 		return ring->next_to_clean - ring->next_to_use - 1;
 
 	return ring->count + ring->next_to_clean - ring->next_to_use - 1;
+}
+
+static inline __le32 mnic_test_staterr(struct mnic_adv_rx_desc *rx_desc,const u32 stat_err_bits)
+{
+	return rx_desc->wb.upper.status_error & cpu_to_le32(stat_err_bits);
 }
 
 #define MNIC_TX_DESC(R,i)	\
