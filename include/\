@@ -4,7 +4,7 @@
 #define MNIC_DEFAULT_TX_WORK    128
 #define MNIC_MAX_TXD		4096
 #define MNIC_MAX_TXD_PWR	15
-#define MNIC_MAX_DATA_PER_TXD   (1u << MNIC_MAX_TXD_PWR)
+#define MNIC_MAX_DATA_PER_TXD   (1u << MNIC_MAX_TXF_PWR)
 
 #define MNIC_DEFAULT_RXD	256
 #define MNIC_MIN_RXD		80
@@ -51,11 +51,9 @@
 #define IGB_TX_WTHRESH	((hw->mac.type == e1000_82576 && \
 			  (adapter->flags & IGB_FLAG_HAS_MSIX)) ? 1 : 16)
 */
-
-#define MNIC_RX_DMA_ATTR (DMA_ATTR_SKIP_CPU_SYNC | DMA_ATTR_WEAK_ORDERING)
 struct mnic_adapter adapter;
 
-struct mnic_adv_tx_descriptor{
+union mnic_adv_tx_descriptor{
 	struct {
 		__le64 buffer_addr;//address of descriptor's data buf
 		__le64 cmd_type_len;
@@ -68,7 +66,7 @@ struct mnic_adv_tx_descriptor{
 	}wb;
 };
 
-struct mnic_adv_rx_descriptor{
+union mnic_adv_rx_descriptor{
 	struct {
 		__le64 pkt_addr; /* Packet buffer address */
 		__le64 hdr_addr; /* Header buffer address */
@@ -182,7 +180,7 @@ struct rx_queue{
 };*/
 
 struct mnic_tx_buffer{
-	struct mnic_adv_tx_descriptor *next_to_watch;
+	struct mnic_adv_tx_desc *next_to_watch;
 	uint16_t time_stamp;
 	struct sk_buff *skb;
 	uint8_t bytecount;
@@ -192,7 +190,7 @@ struct mnic_tx_buffer{
 };
 
 struct mnic_rx_buffer{
-	struct mnic_adv_rx_descriptor *next_to_watch;
+	struct mnic_adv_rx_desc *next_to_watch;
 	dma_addr_t dma;
 	struct page *page;
 
@@ -228,6 +226,25 @@ struct mnic_ring_container{
 	uint8_t itr;
 };
 
+struct mnic_q_vector{
+	struct mnic_adpter *adapter;
+	int cpu;
+	uint32_t eims_value;
+
+	uint16_t itr_val;
+	uint8_t set_itr;
+	void __iomem *itr_register;
+
+	struct mnic_ring_container rx,tx;
+	
+	struct napi_struct napi;
+	struct rcu_head rcu;
+	char name[IFNAMSIZ + 9];
+	
+	struct mnic_ring ring[0] ____cacheline_internodealigned_in_smp;
+
+};
+
 struct mnic_ring{
 	struct mnic_q_vector *q_vector;
 
@@ -252,36 +269,18 @@ struct mnic_ring{
 
 	union{
 		struct{
-			struct mnic_tx_q_stats tx_stats;
+			struct mnic_tx_queue_stats tx_stats;
 			struct u64_stats_sync tx_syncp;
-			struct u64_stats_sync tx_syncp2;
+			struct u64_stats_stnc tx_syncp2;
 		};
 		struct{
 			struct sk_buff *skb;
-			struct mnic_rx_q_stats rx_stats;
+			struct mnic_tx_queue_stats rx_stats;
 			struct u64_stats_sync rx_syncp;
 		};
 		
-	};
-} ____cacheline_internodealigned_in_smp;
-
-struct mnic_q_vector{
-	struct mnic_adapter *adapter;
-	int cpu;
-	uint32_t eims_value;
-
-	uint16_t itr_val;
-	uint8_t set_itr;
-	void __iomem *itr_register;
-
-	struct mnic_ring_container rx,tx;
-	
-	struct napi_struct napi;
-	struct rcu_head rcu;
-	char name[IFNAMSIZ + 9];
-	
-	struct mnic_ring ring[0] ____cacheline_internodealigned_in_smp;
-};
+	}
+} __cacheline_internodealigned_in_smp;
 
 struct mnic_adapter{
 	struct pci_dev *pdev;
@@ -356,10 +355,10 @@ static inline __le32 mnic_test_staterr(struct mnic_adv_rx_descriptor *rx_desc,co
 }
 
 #define MNIC_TX_DESC(R,i)	\
-	(&(((struct mnic_adv_tx_descriptor *)((R)->desc))[i]))
+	(&(((union mnic_adv_tx_desc *)((R)->desc))[i]))
 
 #define MNIC_RX_DESC(R,i)	\
-	(&(((struct mnic_adv_rx_descriptor *)((R)->desc))[i]))
+	(&(((union mnic_adv_rx_desc *)((R)->desc))[i]))
 
 #define mnic_get_mac(dst, src) do {			\
 		dst[0] = src[5];		\

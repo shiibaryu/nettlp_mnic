@@ -18,19 +18,30 @@
 #include <libtlp.h>
 #include <nettlp_mnic.h>
 
-struct mnic_device{
+#define likely(x) __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
+
+struct device_register{
+	uint64_t tx_desc_head;
+	uint64_t rx_desc_head;
+	uint64_t tx_desc_tail;
+	uint64_t rx_desc_tail;
+};
+
+struct nettlp_mnic{
 	//tap fd 
 	int tap_fd;
 	uintptr_t bar4_start;
-	uintptr_t tx_desc_base;
-	uintptr_t rx_desc_base;
+	int tx_queue_id;
+	uintptr_t tx_desc_base[16]:
+	int rx_queue_id;
+	uintptr_t rx_desc_base[16];
 
 	struct nettlp *rx_nt; 
 	struct nettlp_msix tx_irq,rx_irq;
-
-	struct mnic_rx_descriptor *rx_desc;
-	struct mnic_tx_descriptor *tx_desc;
-
+	struct device_register dev_reg;
+	//struct mnic_rx_descriptor *rx_desc;
+	//struct mnic_tx_descriptor *tx_desc;
 };
 
 int tap_alloc(char *dev)
@@ -89,29 +100,49 @@ void signal_handler(int signal)
 
 int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mr,void *m,size_t count,void *arg)
 {
-	int ret;
+	int i=0;
+	uint64_t tail,ret;
 	struct nettlp_mnic *mnic = arg;
-	
+	uintptr_t dma_addr,addr;
+	char buf[4096];
+
 	dma_addr = tlp_mr_addr(mh);
 	info("dma addr is %lx\n",mh);
 	
 	if(is_mwr_addr_tx_desc_ptr(mnic->bar4_start,dma_addr)){
-		memcpy(&mnic->tx_desc_base,m,8);
-		info("TX desc base is %lx",mnic->tx_desc_base);
+		memcpy(&mnic->tx_desc_base[mnic->tx_queue_id],m,8);
+		memcpy(&mnic->dev_reg.tx_desc_head[mnic->tx_queue_id],m,8);
+		info("Queue %d: TX desc base is %lx",mnic->tx_queue_id,mnic->tx_desc_base);
+		mnic->tx_queue_id++;
 	}
 	else if(is_mwr_addr_rx_desc_ptr(mnic->bar4_start,dma_addr)){
-		memcpy(&mnic->rx_desc_base,m,8);
-		info("RX desc base is %lx",mnic->rx_desc_base);
+		memcpy(&mnic->rx_desc_base[mnic->rx_queue_id],m,8);
+		memcpy(&mnic->dev_reg.rx_desc_head[mnic->rx_queue_id],m,8);
+		info("Queue %d: RX desc base is %lx",mnic->rx_queue_id,mnic->rx_desc_base);
+		mnic->rx_queue_id++;
 	}
 	else if(is_mwr_addr_tx_tail_ptr(mnic->bar4_start,dma_addr)){
-		if(mnic->tx_desc_base == 0){
+		if(unlikely(mnic->tx_desc_base == 0)){
 			debug("tx desc base is NULL");
 			goto tx_end;
 		}
-
+		
+		/*get tx base addr*/
+		
+		/*
+		   1.get tx descriptor ring
+		   2.see the pkd addr
+		   3.dma the pkt of 2
+		   4.dma_write to the adapter
+		*/
+	
+		memcpy(&tail,m,sizeof(tail));
+		
+			
+	
 	}
 	else if(is_mwr_addr_rx_tail_ptr(mnic->bar4_start,dma_addr)){
-		if(mnic->rx_desc_base == 0){
+		if(unlikely(mnic->rx_desc_base == 0)){
 			debug("rx desc base is NULL");
 			goto rx_end;
 		}
@@ -259,12 +290,6 @@ int main(int argc,char **argv)
 			return ret;
 		}
 	}
-		
-	mnic.tx_desc = malloc(sizeof(struct mnic_tx_descriptor)*TX_QUEUE_ENTRIES);
-	mnic.rx_desc = malloc(sizeof(struct mnic_rx_descriptor)*RX_QUEUE_ENTRIES);
-	memset(mnic.tx_desc,0,sizeof(struct mnic_tx_descriptor);
-	memset(mnic.rx_desc,0,sizeof(struct mnic_rx_descriptor);
-
 
 	mnic.fd = tap_fd;
 	mnic.bar4_start = nettlp_msg_get_bar4_start(host);	
@@ -282,6 +307,11 @@ int main(int argc,char **argv)
 
 	mnic.tx_irq = msix[0];
 	mnic.rx_irq = msix[1];
+
+	mnic.dev_reg.tx_desc_head = 0;
+	mnic.dev_reg.rx_desc_head = 0;
+	mnic.tx_queue_id = 0;
+	mnic.rx_queue_id = 0;
 
 	info("Device is %04x",nt.requester);
 	info("BAR4 start adress is %#lx",mnic.bar4_start);	       
