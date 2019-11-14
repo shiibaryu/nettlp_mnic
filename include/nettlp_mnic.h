@@ -114,8 +114,8 @@ struct mnic_tx_register{
 
 struct mnic_bar4
 {	
-	uint64_t tx_desc_base;
-	uint64_t rx_desc_base;
+	uint64_t tx_desc_base[8];
+	uint64_t rx_desc_base[8];
 	
 	uint64_t tx_desc_tail;
 	uint64_t rx_desc_tail;
