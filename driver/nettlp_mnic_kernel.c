@@ -39,6 +39,7 @@
 #define DRV_NAME 	    "nettlp_mnic_driver"
 #define MNIC_DESC_RING_LEN  1
 
+#define wrap_ring(index,ring_size) (uint16_t)((index+1)&(ring_size-1))
 #define DEFAULT_MSG_ENABLE (NETIF_MSG_DRV | NETIF_MSG_PROBE | NETIF_MSG_LINK)
 
 static int debug = -1;

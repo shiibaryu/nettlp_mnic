@@ -23,7 +23,7 @@
 
 #define IDX_OFFSET	8
 #define BASE_SUM	16
-#define DESC_SIZE	100
+#define DESC_ENTRY_SIZE	256	
 
 static int rxd_idx;
 
@@ -39,15 +39,19 @@ struct nettlp_mnic{
 	int tap_fd;
 	uintptr_t bar4_start;
 	int tx_queue_id;
-	uintptr_t tx_desc_base[16]:
+	uintptr_t tx_desc_base[10]:
 	int rx_queue_id;
-	uintptr_t rx_desc_base[16];
+	uintptr_t rx_desc_base[10];
 
 	struct nettlp *rx_nt; 
-	struct nettlp_msix tx_irq,rx_irq;
+	struct nettlp_msix tx_irq[8],rx_irq[8];
 	struct device_register dev_reg;
 
+	char *tx_buf[];
+	char *rx_buf[];
+	
 	int rx_state;
+	int writev_cnt;
 #define RX_STATE_INIT	0
 #define RX_STATE_READY  1
 #define RX_STATE_BUSY   2
@@ -121,16 +125,14 @@ void signal_handler(int signal)
 
 void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned int offset)
 {
-	int i;
+	int i=0;
 	int ret;
 	uintptr_t addr;
 	struct descriptor desc;
+	struct iovec vector[idx];
+	//char *buf[] = malloc(4096)*WRITEV_SIZE;
 
 	addr = mnic->tx_desc_base[offset] + (sizeof(struct descriptor)*idx);
-	
-	/*
-	nicのヘッダから送られてきたtailまでforをぶん回す
-	*/
 
 	while(mnic->tx_head != addr){
 		ret = dma_read(nt,mnic->head,&desc,sizeof(desc));
@@ -141,18 +143,21 @@ void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 			}
 		}
 		
-		ret = dma_read(nt,desc.addr,buf,desc.length);
+		ret = dma_read(nt,desc.addr,mnic->tx_buf[i],desc.length);
 		if(ret < desc.length){
 			fprintf(stderr,"failed to read tx pkt from %#lx, %lu-byte",desc.addr,desc.length);
 				goto tx_end;
 		}
 		
+		vector[i].iov_base = mnic->tx_buf[i];
+		vector[i].iov_len = sizeof(4096);
+
 		mnic->tx_head += (sizeof(struct descriptor));
+		i++;
 	}
 
-	//まとめてライトしたい
-	
-	ret = writev(mnic->tap_fd,buf,desc.length);
+	mnic->writev_cnt = i;
+	ret = writev(mnic->tap_fd,vector,i);
 	if(ret < 0){
 		fprintf(stderr,"failed to tx pkt to tap \n");
 		perror("write");
@@ -160,7 +165,7 @@ void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 	}
 
 tx_end:
-	ret = dma_write(nt,mnic->tx_irq.addr,&mnic->tx_irq.data,sizeof(mnic->tx_irq.data));
+	ret = dma_write(nt,mnic->tx_irq.addr,&mnic->tx_irq[offset].data,sizeof(mnic->tx_irq[offset].data));
 	if(ret < 0){
 		fprintf(stderr,"failed to send tx interrupt\n");
 		perror("dma_write");
@@ -172,7 +177,8 @@ tx_end:
 
 void mnic_rx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned int offset)
 {
-	int i,ret;
+	int i=0;
+	int ret;
 	uintptr_t addr;
 	
 	if(mnic->rx_desc_base[offset] == 0){
@@ -196,6 +202,7 @@ void mnic_rx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 		}
 		 	
 		mnic->head += (sizeof(struct descriptor));
+		i++;
 	}
 
 	mnic->rx_nt = nt;
@@ -210,7 +217,6 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mr,void *m,size_t count
 	uint32_t idx;
 	struct nettlp_mnic *mnic = arg;
 	uintptr_t dma_addr,addr;
-	char buf[4096];
 
 	dma_addr = tlp_mr_addr(mh);
 	info("dma addr is %lx\n",mh);
@@ -249,7 +255,7 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mr,void *m,size_t count
 			debug("tx desc base is NULL");
 			goto tx_end;
 		}
-		memcpy(&tail,m,sizeof(tail));
+			memcpy(&tail,m,sizeof(tail));
 	}
 	else if(is_mwr_addr_rx_tail_ptr(mnic->bar4_start,dma_addr)){
 		if(unlikely(mnic->rx_desc_base == 0)){
@@ -261,35 +267,66 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mr,void *m,size_t count
 	return 0;
 }
 
+/*actual rx part*/
 void *nettlp_mnic_tap_read_thread(void *arg)
 {
-	int ret,len;
-	char buf[2048];
+	int ret,len,i,v;
+	//char *buf[] = malloc(4096)*WRITEV_SIZE;
 	struct nettlp_mnic *mnic = arg;
+	struct iovec vector[DESC_ENTRY_SIZ];
 	struct poll_fd x[1] = {{.fd = mnic->tap_fd,.events = POLLIN}};
 
 	while(1){
 		if(caught_signal){
 			break;
 		}
+		
 		ret = poll(x,1,500);
 		if(ret < 0 || ret == 0 || !(x[0].revents & POLLIN)){
 			continue;
 		}
-		
-		len = read(mnic->tap_fd,buf,sizeof(buf));
+
+		v = mnic->writev_cnt;	
+		for(i=0;i<v;i++){
+			vector[i]->iov_base = mnic->rx_buf[i];
+			vector[i]->iov_len = 4096;
+		}
+
+		len = readv(mnic->tap_fd,vector,i);
 		if(len<0){
 			perror("read");
 			continue;
 		}
-		
-		ret = dma_write(mnic->,mnic->rx_desc.addr,buf,len);
-		if(ret < 0){
-			debug("failed to dma_write pkt to %lx",mnic->rx_desc.addr);
+
+		if(mnic->rx_state != RX_STATE_READY){
 			continue;
 		}
+	
+		mnic->rx_state = RX_STATE_BUSY;
+
+		for(v=0;v<i;v++){
+			ret = dma_write(mnic->,mnic->rx_desc.addr,vector[i].iov_base,vector[i].iov_len);
+			if(ret < 0){
+				debug("failed to dma_write pkt to %lx",mnic->rx_desc.addr);
+				continue;
+			}
+		}
 		
+		mnic->rx_desc.length = pktlen;
+		ret = dma_write(mnic->rx_nt,mnic->rx_desc_addr,&mnic->rx_desc,sizeof(mnic->rx_desc));
+		if(ret < sizeof(mnic->rx_desc)){
+			fprintf(stderr,"failed to write rx desc to %#lx\n",mnic->rx_desc_addr);
+			continue;
+		}
+
+		ret = dma_write(mnic->rx_nt,mnic->rx_irq.addr,&mnic->rx_irq.data,sizeof(mnic->rx_irq.data));
+		if(ret < 0){
+			fprintf(stderr,"failed to generate Rx Interrupt\n");
+			perror("dma_write for rx interrupt");
+		}
+
 		info("RX done. DMA write to %lx %d byte",mnic->rx_desc,len);
+		mnic->rx_state = RX_STATE_DONE;
 	}
 
 	return NULL;
@@ -336,7 +373,7 @@ void usage()
 
 int main(int argc,char **argv)
 {
-        int opt,ret,tap_fd;
+        int opt,ret,tap_fd,i;
         char *ifname = "tap8";
 	struct nettlp nt,nts[16],*nts_ptr[16];
 	struct nettlp nttlp_cb;
@@ -410,14 +447,19 @@ int main(int argc,char **argv)
 		return -1;
 	}
 
-	ret = nettlp_msg_get_msix_table(host,msix,2);
+	ret = nettlp_msg_get_msix_table(host,msix,16);
 	if(ret < 0){
 		debug("faled to get msix table from %s\n",inet_ntoa(host));
 		info("nettlp_msg_get_msix_table");
 	}	
 
-	mnic.tx_irq = msix[0];
-	mnic.rx_irq = msix[1];
+	for(i=0;i<8;i++){
+		mnic.tx_irq[i] = msix[i];
+		mnic.rx_irq[i+8] = msix[i+8];
+	}
+
+	mnic.tx_buf = malloc(4096)*DESC_ENTRY_SIZ;
+	mnic.rx_buf = malloc(4096)*DESC_ENTRY_SIZ;
 
 	mnic.dev_reg.tx_desc_head = 0;
 	mnic.dev_reg.rx_desc_head = 0;
