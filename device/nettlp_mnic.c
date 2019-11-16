@@ -27,11 +27,11 @@
 
 static int rxd_idx;
 
-struct device_register{
+struct desc_ctl{
+	uint32_t tx_head_idx;
+	uint32_t rx_head_idx;
 	uint64_t tx_desc_head;
 	uint64_t rx_desc_head;
-	uint64_t tx_desc_tail;
-	uint64_t rx_desc_tail;
 };
 
 struct nettlp_mnic{
@@ -123,6 +123,8 @@ void signal_handler(int signal)
 	nettlp_stop_cb();
 }
 
+//headの取得
+//一周回ったあとの0への戻り方
 void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned int offset)
 {
 	int i=0;
@@ -134,7 +136,7 @@ void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 
 	addr = mnic->tx_desc_base[offset] + (sizeof(struct descriptor)*idx);
 
-	while(mnic->tx_head != addr){
+	while(/*mnic->tx_head != addr*/mnic->tx_head_idx != idx){
 		ret = dma_read(nt,mnic->head,&desc,sizeof(desc));
 		if(ret < sizeof(desc)){
 			if(ret < sizeof(desc)){
@@ -152,8 +154,14 @@ void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 		vector[i].iov_base = mnic->tx_buf[i];
 		vector[i].iov_len = sizeof(4096);
 
+		mnic->tx_head_idx++;
 		mnic->tx_head += (sizeof(struct descriptor));
 		i++;
+
+		if(mnic->tx_head_idx >= DESC_ENTRY_SIZE){
+			mnic->tx_head_idx = 0;
+			mnic->tx_head = mnic->tx_desc_base[offset];
+		}
 	}
 
 	mnic->writev_cnt = i;
@@ -192,17 +200,22 @@ void mnic_rx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 
 	addr = mnic->rx_desc_base[offset] + (sizeof(struct descriptor)*idx);
 	
-	while(mnic->rx_head != addr){
-		mnic->rx_desc_addr[rxd_offset] = mnic->rx_head;	
-	
+	while(/*mnic->rx_head != addr*/mnic->rx_head_idx != idx){
+		//mnic->rx_desc_addr[rxd_offset] = mnic->rx_head;
+
 		ret = dma_read(nt,mnic->rx_desc_addr[i],&mnic->rx_desc,sizeof(mnic->rx_desc));
 		if(ret < sizeof(mnic->rx_desc)){
 			fprintf(stderr,"failed to read rx desc from %#lx\n",mnic->rxdesc_addr[i]);
 			return;
 		}
 		 	
-		mnic->head += (sizeof(struct descriptor));
+		mnic->rx_head += (sizeof(struct descriptor));
 		i++;
+		mnic->rx_head_idx++;
+		if(mnic->rx_head_idx > DESC_ENTRY_SIZE){
+			mnic->rx_head_idx = 0;
+			mnic->rx_head = mnic->rx_desc_base[offset];
+		}
 	}
 
 	mnic->rx_nt = nt;
@@ -305,7 +318,7 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 		mnic->rx_state = RX_STATE_BUSY;
 
 		for(v=0;v<i;v++){
-			ret = dma_write(mnic->,mnic->rx_desc.addr,vector[i].iov_base,vector[i].iov_len);
+			ret = dma_write(mnic->rx_nt,mnic->rx_desc.addr,vector[i].iov_base,vector[i].iov_len);
 			if(ret < 0){
 				debug("failed to dma_write pkt to %lx",mnic->rx_desc.addr);
 				continue;
