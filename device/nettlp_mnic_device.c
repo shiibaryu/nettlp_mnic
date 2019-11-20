@@ -79,6 +79,7 @@ struct nettlp_mnic{
 #define RX_STATE_BUSY   2
 #define RX_STATE_DONE	3
 	uintptr_t *rx_desc_addr;
+#define _GNU_SOURCE
 	
 };
 
@@ -186,6 +187,7 @@ void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 		if(txd_ctl->tx_head_idx >= DESC_ENTRY_SIZE){
 			txd_ctl->tx_head_idx = 0;
 			txd_ctl->tx_desc_head = addr;
+			buf = mnic->tx_buf;
 		}
 	}
 
