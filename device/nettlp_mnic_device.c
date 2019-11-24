@@ -350,8 +350,8 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 			mnic->rx_desc++;
 		}
 		
-		//mnic->rx_desc.length = pktlen;
 		//write back 問題
+		//mnic->rx_desc.length = pktlen;
 		ret = dma_write(mnic->rx_nt,*rxd_addr,mnic->rx_desc,sizeof(struct descriptor));
 		if(ret < sizeof(struct descriptor)){
 			fprintf(stderr,"failed to write rx desc to %#lx\n",*rxd_addr);
