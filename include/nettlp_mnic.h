@@ -25,6 +25,8 @@
 
 #define MNIC_RXD_STAT_EOP	0x02
 
+#define DESC_NEEDED		(MAX_SKB_FRAGS + 4)
+
 #define MNIC_RXDEXT_STATERR_LB    0x00040000
 #define MNIC_RXDEXT_STATERR_CE    0x01000000
 #define MNIC_RXDEXT_STATERR_SE    0x02000000
@@ -55,7 +57,12 @@
 #define MNIC_RX_DMA_ATTR (DMA_ATTR_SKIP_CPU_SYNC | DMA_ATTR_WEAK_ORDERING)
 struct mnic_adapter adapter;
 
-struct mnic_adv_tx_descriptor{
+struct descriptor{
+	uint64_t addr;
+	uint64_t length;
+}__attribute__((packed));
+
+/*struct mnic_adv_tx_descriptor{
 	struct {
 		__le64 buffer_addr;//address of descriptor's data buf
 		__le64 cmd_type_len;
@@ -66,37 +73,37 @@ struct mnic_adv_tx_descriptor{
 		__le32 nxtseq_seed;
 		__le32 status;
 	}wb;
-};
+};*/
 
-struct mnic_adv_rx_descriptor{
+/*struct mnic_adv_rx_descriptor{
 	struct {
-		__le64 pkt_addr; /* Packet buffer address */
-		__le64 hdr_addr; /* Header buffer address */
+		__le64 pkt_addr; //Packet buffer address 
+		__le64 hdr_addr; // Header buffer address 
 	} read;
 	struct {
 		struct {
 			union {
 				__le32 data;
 				struct {
-					__le16 pkt_info; /* RSS, Pkt type */
-					__le16 hdr_info; /* Splithdr, hdrlen */
+					__le16 pkt_info; // RSS, Pkt type 
+					__le16 hdr_info; // Splithdr, hdrlen 
 				} hs_rss;
 			} lo_dword;
 			union {
-				__le32 rss; /* RSS Hash */
+				__le32 rss; // RSS Hash 
 				struct {
-					__le16 ip_id; /* IP id */
-					__le16 csum; /* Packet Checksum */
+					__le16 ip_id; // IP id 
+					__le16 csum; // Packet Checksum 
 				} csum_ip;
 			} hi_dword;
 		} lower;
 		struct {
-			__le32 status_error; /* ext status/error */
-			__le16 length; /* Packet length */
-			__le16 vlan; /* VLAN tag */
+			__le32 status_error; // ext status/error 
+			__le16 length; // Packet length 
+			__le16 vlan; // VLAN tag 
 		} upper;
-	} wb;  /* writeback */
-};
+	} wb;  // writeback 
+};*/
 
 struct mnic_rx_register{
 	uint64_t rdba;//receive base address register rdbl(32bit) rdbh(32bit) (low&high)
@@ -182,7 +189,7 @@ struct rx_queue{
 };*/
 
 struct mnic_tx_buffer{
-	struct mnic_adv_tx_descriptor *next_to_watch;
+	struct descriptor *next_to_watch;
 	uint16_t time_stamp;
 	struct sk_buff *skb;
 	uint8_t bytecount;
@@ -192,7 +199,7 @@ struct mnic_tx_buffer{
 };
 
 struct mnic_rx_buffer{
-	struct mnic_adv_rx_descriptor *next_to_watch;
+	struct descriptor *next_to_watch;
 	dma_addr_t dma;
 	struct page *page;
 
@@ -350,16 +357,17 @@ static inline int mnic_desc_unused(struct mnic_ring *ring)
 	return ring->count + ring->next_to_clean - ring->next_to_use - 1;
 }
 
-static inline __le32 mnic_test_staterr(struct mnic_adv_rx_descriptor *rx_desc,const u32 stat_err_bits)
+static inline __le32 mnic_test_staterr(struct descriptor *rx_desc,const u32 stat_err_bits)
 {
-	return rx_desc->wb.upper.status_error & cpu_to_le32(stat_err_bits);
+	//return rx_desc->wb.upper.status_error & cpu_to_le32(stat_err_bits);
+	return 0;
 }
 
 #define MNIC_TX_DESC(R,i)	\
-	(&(((struct mnic_adv_tx_descriptor *)((R)->desc))[i]))
+	(&(((struct descriptor *)((R)->desc))[i]))
 
 #define MNIC_RX_DESC(R,i)	\
-	(&(((struct mnic_adv_rx_descriptor *)((R)->desc))[i]))
+	(&(((struct descriptor *)((R)->desc))[i]))
 
 #define mnic_get_mac(dst, src) do {			\
 		dst[0] = src[5];		\
