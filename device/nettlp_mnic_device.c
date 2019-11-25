@@ -53,7 +53,6 @@ struct descriptor{
 } __attribute__((packed));
 
 struct nettlp_mnic{
-	//tap fd 
 	int tap_fd;
 	uintptr_t bar4_start;
 	int tx_queue_id;
@@ -64,16 +63,16 @@ struct nettlp_mnic{
 	struct nettlp *rx_nt; 
 	struct nettlp_msix *tx_irq,*rx_irq;
 
-	struct descriptor *rx_desc;
+	struct descriptor *rx_desc[RX_QUEUES];
 	struct tx_desc_ctl *tx_desc_ctl;
 	struct rx_desc_ctl *rx_desc_ctl;
 
 	unsigned char *tx_buf;
 	unsigned char *rx_buf;
 	
-	int rx_state;
-	unsigned int writev_cnt;
+	uint16_t write_cnt;
 	uint8_t q_offset;
+	int rx_state[8];
 #define RX_STATE_INIT	0
 #define RX_STATE_READY  1
 #define RX_STATE_BUSY   2
@@ -152,8 +151,7 @@ void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 	int ret;
 	uintptr_t addr,tail;
 	struct descriptor desc;
-	struct iovec vector[idx];
-	unsigned char *buf = mnic->tx_buf;
+	unsigned char *buf = mnic->tx_buf + offset;
 	struct tx_desc_ctl *txd_ctl = mnic->tx_desc_ctl + offset;
 	struct nettlp_msix *tx_irq = mnic->tx_irq + offset;
 	
@@ -174,31 +172,26 @@ void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 			fprintf(stderr,"failed to read tx pkt from %#lx, %lu-byte",desc.addr,desc.length);
 				goto tx_end;
 		}
-		
-		vector[i].iov_base = buf;
-		//pagesize
-		vector[i].iov_len = 4096;
+	
+		ret = write(mnic->tap_fd,buf,desc.length);
+		if(ret < desc.length){
+			fprintf(stderr,"failed to read tx pkt from %lx,%lu-bytes\n",desc.addr,desc.length);
+			perror("write");
+			goto tx_end;
+		}
 
 		txd_ctl->tx_head_idx++;
 		txd_ctl->tx_desc_head += sizeof(struct descriptor);
-		buf++;
 		i++;
 
 		if(txd_ctl->tx_head_idx >= DESC_ENTRY_SIZE){
 			txd_ctl->tx_head_idx = 0;
 			txd_ctl->tx_desc_head = addr;
-			buf = mnic->tx_buf;
 		}
 	}
 
-	mnic->writev_cnt = i;
+	mnic->write_cnt = i;
 	mnic->q_offset = offset;
-	ret = writev(mnic->tap_fd,vector,i);
-	if(ret < 0){
-		fprintf(stderr,"failed to tx pkt to tap \n");
-		perror("write");
-		goto tx_end;
-	}
 
 tx_end:
 	ret = dma_write(nt,tx_irq->addr,&tx_irq->data,sizeof(tx_irq->data));
@@ -211,11 +204,10 @@ tx_end:
 	printf("TX done");
 }
 
-//receive用のバッファの再利用
 void mnic_rx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned int offset)
 {
 	int ret;
-	struct descriptor *desc = mnic->rx_desc;
+	struct descriptor *desc = mnic->rx_desc[offset];
 	uintptr_t *rx_desc_base = mnic->rx_desc_base + offset;
 	struct rx_desc_ctl *rxd_ctl = mnic->rx_desc_ctl + offset;
 	//uintptr_t addr;
@@ -225,9 +217,9 @@ void mnic_rx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 		return;
 	}
 
-	while(mnic->rx_state != RX_STATE_DONE && mnic->rx_state != RX_STATE_INIT){
+	/*while(mnic->rx_state[offset] != RX_STATE_DONE && mnic->rx_state[offset] != RX_STATE_INIT){
 		sched_yield();
-	}
+	}*/
 
 	//addr = rxd_ctl->rx_desc_head + (sizeof(struct descriptor)*idx);
 	//addr = rxd_ctl->rx_desc_head;
@@ -250,7 +242,7 @@ void mnic_rx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 	}
 
 	mnic->rx_nt = nt;
-	mnic->rx_state = RX_STATE_READY;
+	/*mnic->rx_state[offset] = RX_STATE_READY;*/
 }
 
 int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mh,void *m,size_t count,void *arg)
@@ -286,7 +278,7 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mh,void *m,size_t count
 			mnic_tx(idx,nt,mnic,offset);
 			return 0;
 		}else if(offset >= 8){
-			mnic_rx(idx,nt,mnic,offset/8);
+			mnic_rx(idx,nt,mnic,offset - 8);
 			return 0;
 		}
 	}
@@ -297,14 +289,14 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mh,void *m,size_t count
 /*actual rx part*/
 void *nettlp_mnic_tap_read_thread(void *arg)
 {
-	int ret,pktlen,i,v;
+	int ret,pktlen,i,wr;
 	int q_offset;
 	struct nettlp_mnic *mnic = arg;
-	unsigned char *buf = mnic->rx_buf;
+	unsigned char *buf;
 	uintptr_t *rxd_addr;
+	struct descriptor *rx_desc;
 	struct nettlp_msix *rx_irq;
 	//struct descriptor *desc = mnic->rx_desc;
-	struct iovec vector[DESC_ENTRY_SIZE];
 	struct pollfd x[1] = {{.fd = mnic->tap_fd, .events = POLLIN}};
 
 	while(1){
@@ -317,46 +309,38 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 			continue;
 		}
 
-		v = mnic->writev_cnt;	
-		q_offset = mnic->q_offset;	
+		wr = mnic->write_cnt;
+		q_offset = mnic->q_offset;
 		rxd_addr = mnic->rx_desc_addr + q_offset;
 		rx_irq = mnic->rx_irq + q_offset;
+		buf = mnic->rx_buf + q_offset;
+		rx_desc = mnic->rx_desc[q_offset];
 
-		for(i=0;i<v;i++){
-			vector[i].iov_base = buf;
-			vector[i].iov_len = 4096;
-			buf++;
+		for(i=0;i<wr;i++){
+			pktlen = read(mnic->tap_fd,buf,sizeof(*buf));
+			if(pktlen<0){
+				perror("read");
+				continue;
+			}
+			ret = dma_write(mnic->rx_nt,rx_desc->addr,buf,pktlen);
+			if(ret < 0){
+				debug("failed to dma_write pkt to %lx",rx_desc->addr);
+				continue;
+			}
+			//mnic->rx_desc.length = pktlen;
+			/*ret = dma_write(mnic->rx_nt,*rxd_addr,mnic->rx_desc,sizeof(struct descriptor));
+			if(ret < sizeof(struct descriptor)){
+				fprintf(stderr,"failed to write rx desc to %#lx\n",*rxd_addr);
+				continue;
+			}*/
+			rx_desc++;
 		}
 
-		pktlen = readv(mnic->tap_fd,vector,i);
-		if(pktlen<0){
-			perror("read");
-			continue;
-		}
-
-		if(mnic->rx_state != RX_STATE_READY){
+		/*if(mnic->rx_state[q_offset] != RX_STATE_READY){
 			continue;
 		}
 	
-		mnic->rx_state = RX_STATE_BUSY;
-
-		//dma_write packets to host
-		for(v=0;v<i;v++){
-			ret = dma_write(mnic->rx_nt,mnic->rx_desc->addr,vector[v].iov_base,4096);
-			if(ret < 0){
-				debug("failed to dma_write pkt to %lx",mnic->rx_desc->addr);
-				continue;
-			}
-			mnic->rx_desc++;
-		}
-		
-		//write back 問題
-		//mnic->rx_desc.length = pktlen;
-		/*ret = dma_write(mnic->rx_nt,*rxd_addr,mnic->rx_desc,sizeof(struct descriptor));
-		if(ret < sizeof(struct descriptor)){
-			fprintf(stderr,"failed to write rx desc to %#lx\n",*rxd_addr);
-			continue;
-		}*/
+		mnic->rx_state[q_offset] = RX_STATE_BUSY;*/
 
 		//generate rx interrupt
 		ret = dma_write(mnic->rx_nt,rx_irq->addr,&rx_irq->data,sizeof(rx_irq->data));
@@ -366,7 +350,7 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 		}
 
 		info("RX done. DMA write to %lx %d byte",*rxd_addr,pktlen);
-		mnic->rx_state = RX_STATE_DONE;
+		//mnic->rx_state = RX_STATE_DONE;
 	}
 
 	return NULL;
@@ -381,10 +365,13 @@ void mnic_alloc(struct nettlp_mnic *mnic)
 	mnic->tx_irq = calloc(TX_QUEUES,sizeof(struct nettlp_msix));
 	mnic->rx_irq = calloc(RX_QUEUES,sizeof(struct nettlp_msix));
 
-	mnic->tx_buf = calloc(DESC_ENTRY_SIZE,4096);
-	mnic->rx_buf = calloc(DESC_ENTRY_SIZE,4096);
+	mnic->tx_buf = calloc(TX_QUEUES,4096);
+	mnic->rx_buf = calloc(RX_QUEUES,4096);
 
-	mnic->rx_desc = calloc(DESC_ENTRY_SIZE,sizeof(struct descriptor));
+	for(int i=0;i<RX_QUEUES;i++){
+		mnic->rx_desc[i] = calloc(DESC_ENTRY_SIZE,sizeof(struct descriptor));
+	}
+
 	mnic->tx_desc_ctl = calloc(TX_QUEUES,sizeof(struct tx_desc_ctl));
 	mnic->rx_desc_ctl = calloc(RX_QUEUES,sizeof(struct rx_desc_ctl));
 }

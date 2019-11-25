@@ -390,7 +390,7 @@ static int mnic_request_msix(struct mnic_adapter *adapter)
 			sprintf(q_vector->name, "%s-unused", ndev->name);
 		}
 
-		ret = request_irq(adapter->msix_entries[vector].vector,mnic_msix_ring,0,q_vector->name,q_vector);
+		ret = request_irq(adapter->msix_entries[i].vector,mnic_msix_ring,0,q_vector->name,q_vector);
 		if(ret){
 			goto err_free;
 		}
