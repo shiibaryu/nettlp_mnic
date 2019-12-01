@@ -367,12 +367,13 @@ static int mnic_request_msix(struct mnic_adapter *adapter)
 	int free_vector = 0;
 	struct net_device *ndev = adapter->ndev;
 
+	pr_info("%s:",__func__);
 	/*ret = request_irq(adpter->msix_entries[vector].vector,
 			igb_msix_other,0,ndev->name,adpter);*/
 
 	for(i=0;i<adapter->num_q_vectors;i++){
 		struct mnic_q_vector *q_vector = adapter->q_vector[i];
-		//vector++;
+		vector++;
 
 		if(q_vector->rx.ring && q_vector->tx.ring){
 			sprintf(q_vector->name, "%s-TxRx-%u", ndev->name,
@@ -403,6 +404,7 @@ static int mnic_request_msix(struct mnic_adapter *adapter)
 err_free:
 
 	/* free already assigned IRQs */
+	pr_info("%s:err_free happen",__func__);
 	free_irq(adapter->msix_entries[free_vector++].vector, adapter);
 	vector--;
 
@@ -422,17 +424,13 @@ static int mnic_request_irq(struct mnic_adapter *adapter)
 	ret = mnic_request_msix(adapter);
 
 	if(ret==0){
-		//うまくいけばここでおわり
 		goto request_done;
 	}
 	else{
-		pr_info("%s: koko ni kiteha dame!!!!!",__func__);
-		pr_info("%s: outihe okeeri!!!",__func__);
-		return -1;
-		/*mnic_free_all_tx_resources(adpter);
-		mnic_free_all_rx_resources(adpter);
+	/*	mnic_free_all_tx_resources(adapter);
+		mnic_free_all_rx_resources(adapter);
 
-		mnic_clear_interrupt_scheme(adpter);
+		mnic_clear_interrupt_scheme(adapter);
 		ret = mnic_init_interrupt_scheme(adpter,false);
 		if(ret){
 			goto request_done;
@@ -444,10 +442,10 @@ static int mnic_request_irq(struct mnic_adapter *adapter)
 
 		//mnic_assign_vector(adpter->q_vector[0],0);
 
-		ret = request_irq(pdev->irq,mnic_itr,IRQ_SHARED,ndev->name,adpter):
+		ret = request_irq(pdev->irq,mnic_itr,IRQ_SHARED,ndev->name,adpter):*/
 		if(ret){
 			pr_info("%s: failed to get irq\n",__func__);
-		}*/
+		}
 	}
 
 request_done:
@@ -919,6 +917,7 @@ static int __mnic_open(struct net_device *ndev,bool resuming)
 {
 	int ret,i;
 	struct mnic_adapter *adapter = netdev_priv(ndev);
+	pr_info("%s: start allocate each value",__func__);
 	//struct pci_dev *pdev = adapter->pdev;
 
 	/*if(!resuming){
@@ -1361,7 +1360,7 @@ static void mnic_set_interrupt_capability(struct mnic_adapter *adapter,bool msix
 	adapter->num_q_vectors = numvecs;
 
 	//add 1 vector for link status interrupts
-	numvecs++;
+	//numvecs++;
 	//adapter->msix_entries = kcalloc(numvecs,sizeof(struct msix_entry),GFP_KERNEL);
 	
 	for(i=0;i<numvecs;i++){

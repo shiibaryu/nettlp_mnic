@@ -1,10 +1,10 @@
 CC = gcc
 INCLUDE := -I../libtlp/include 
 LDFLAGS := -L../libtlp/lib
-LDLIBS 	:=  -lpthread
+LDLIBS 	:=  -ltlp -lpthread
 CFLAGS  := -g -Wall $(INCLUDE)
 
-PROGNAME = nettlp_mnic_device
+PROGNAME = nettlp_mnic_device 
 
 all: $(PROGNAME)
 
