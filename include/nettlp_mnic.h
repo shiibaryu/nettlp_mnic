@@ -11,10 +11,10 @@
 #define MNIC_MAX_RXD		4096
 
 #define MAX_Q_VECTORS		8
-#define MAX_MSIX_ENTRIES	10
 
 #define MNIC_MAX_TX_QUEUES	8
 #define MNIC_MAX_RX_QUEUES	8
+#define MAX_MSIX_ENTRIES	16
 
 #define MNIC_DEFAULT_ITR	3
 
