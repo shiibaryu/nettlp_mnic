@@ -763,7 +763,9 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 		dma_wmb();
 		//notify rx tail
 		adapter->bar4->rx_desc_tail = i;
+		pr_info("rx descriptor tail is %d",i);
 	}
+
 	pr_info("%s: end \n",__func__);
 }
 
@@ -1002,10 +1004,11 @@ static void mnic_free_irq(struct mnic_adapter *adapter)
 
 	pr_info("%s: start \n",__func__);
 
-	free_irq(adapter->msix_entries[vector++].vector,adapter);
+	//free_irq(adapter->msix_entries[vector++].vector,adapter);
 
 	for(i=0;i<adapter->num_q_vectors;i++){
-		free_irq(adapter->msix_entries[vector++].vector,adapter->q_vector[i]);
+		free_irq(adapter->msix_entries[vector].vector,adapter->q_vector[i]);
+		vector++;
 	}
 	pr_info("%s: end \n",__func__);
 }
@@ -1291,7 +1294,7 @@ dma_error:
 	return -1;
 }
 
-static int __mnic_close(struct net_device *ndev,bool suspending)
+/*static int __mnic_close(struct net_device *ndev,bool suspending)
 {
 	int i;
 	struct mnic_adapter *adapter = netdev_priv(ndev);
@@ -1329,7 +1332,62 @@ static int __mnic_close(struct net_device *ndev,bool suspending)
 
 	pr_info("%s: end \n",__func__);
 	return 0;
+}*/
+
+void mnic_down(struct mnic_adapter *adapter)
+{
+	int i;
+	struct net_device *ndev = adapter->ndev;
+	
+	pr_info("%s: start\n",__func__);
+
+	netif_carrier_off(ndev);
+	netif_tx_stop_all_queues(ndev);
+	
+	for(i=0;i<adapter->num_q_vectors;i++){
+		synchronize_irq(adapter->msix_entries[i].vector);
+	}
+
+	for(i=0;i<adapter->num_q_vectors;i++){
+		if(adapter->q_vector[i]){
+			napi_synchronize(&adapter->q_vector[i]->napi);
+			napi_disable(&adapter->q_vector[i]->napi);
+		}
+	}
+
+	mnic_clean_all_tx_rings(adapter);
+	mnic_clean_all_rx_rings(adapter);
+	
+	pr_info("%s: end\n",__func__);
 }
+
+static int __mnic_close(struct net_device *ndev)
+{
+	int i;
+	struct mnic_adapter *adapter = netdev_priv(adapter);
+	struct pci_dev *pdev = adapter->pdev;
+
+	pr_info("%s: start\n",__func__);
+
+	if(!suspending){
+		pm_runtime_get_sync(&pdev->dev);
+	}
+
+	mnic_down(adapter);
+	mnic_free_irq(adapter);
+
+	mnic_free_all_tx_resources(adapter);
+	mnic_free_all_rx_resources(adapter);
+		
+	if(!suspending){
+		pm_runtime_put_sync(&pdev->dev);
+	}
+
+	pr_info("%s: end\n",__func__);
+
+	return 0;
+}
+
 int mnic_close(struct net_device *ndev)
 {
 	pr_info("%s: start \n",__func__);
@@ -1535,7 +1593,7 @@ static void mnic_set_interrupt_capability(struct mnic_adapter *adapter,bool msix
 	ret = pci_enable_msix_range(adapter->pdev,adapter->msix_entries,numvecs,numvecs);
 
 	/*If success, return*/	
-	if(ret>0){
+	if(ret > 0){
 		pr_info("enabled %d msix",ret);
 		return;
 	}
@@ -1952,27 +2010,18 @@ static void mnic_remove(struct pci_dev *pdev)
 
 	pr_info("start remove pci config");
 
-	//kfree(adpter->rx_tasklet);
-
 	nettlp_msg_fini();
-	//nettlp_unregister_interrupts(adapter);
-	//pci_free_irq_vectors(pdev);
 
 	unregister_netdev(dev);
 
-	/*dma_free_coherent(&pdev->dev,sizeof(struct tx_queue)*MNIC_TX_QUEUE_ENTRIES,(void*)adpter->txq,adpter->txq->tx_desc_paddr);
-
-	dma_free_coherent(&pdev->dev,sizeof(struct rx_queue)*MNIC_RX_QUEUE_ENTRIES,(void*)adpter->rxq,adpter->rxq->rx_desc_paddr);
-
-	dma_free_coherent(&pdev->dev,sizeof(struct packet_buffer)*PKT_BUF_ENTRY_SIZE,(void*)adpter->tx_buf,&adpter->tx_buf->paddr);
-
-	dma_free_coherent(&pdev->dev,sizeof(struct packet_buffer)*PKT_BUF_ENTRY_SIZE,(void*)adpter->rx_buf,&adpter->rx_buf->paddr);*/
+	mnic_clear_interrupt_scheme(adapter);
 
 	iounmap(adapter->bar4);
 	iounmap(adapter->bar2);
 	iounmap(adapter->bar0);
 
 	pci_release_regions(pdev);
+	free_netdev(dev);
 	pci_disable_device(pdev);
 
 	return;
