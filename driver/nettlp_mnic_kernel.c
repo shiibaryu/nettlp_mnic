@@ -187,30 +187,33 @@ static int mnic_setup_tx_resource(struct mnic_ring *tx_ring,int i,struct mnic_ad
 {
 	int size;
 	struct device *dev = tx_ring->dev;
-	//struct mnic_adapter *adapter = netdev_priv(dev);
 	
 	pr_info("%s: start",__func__);
 
-	//tx_ring->count = MNIC_DEFAULT_TXD;
 	size = sizeof(struct mnic_tx_buffer)*tx_ring->count;
+	pr_info("For buffer-> size: %d ring_count: %d",size,tx_ring->count);
 	
 	tx_ring->tx_buf_info = vmalloc(size);
 	if(!tx_ring->tx_buf_info){
 		pr_info("%s: failed to alloc tx bufffer\n",__func__);
 		goto err;
 	}
+	pr_info("Success: allocate tx_ring->tx_buf_info");
 	
 	tx_ring->size = tx_ring->count*sizeof(struct descriptor);
 	tx_ring->size = ALIGN(tx_ring->size,4096);
 	
+	pr_info("For descriptor-> size: %d ring_count: %d",tx_ring->size,tx_ring->count);
+
 	tx_ring->desc = dma_alloc_coherent(dev,tx_ring->size,&tx_ring->dma,GFP_KERNEL);
 	if(!tx_ring->desc){
 		goto err;
 	}
-	
+	pr_info("Success: allocate tx_ring->desc");
+
 	/*notify descriptor base address*/
 	adapter->bar4->tx_desc_base[i] = tx_ring->dma;
-	pr_info("notify tx descriptor base address -> %#llx\n",adapter->bar4->tx_desc_base[i]);
+	pr_info("tx descriptor base address[%d] -> %#llx\n",i,tx_ring->dma);
 
 	tx_ring->next_to_use = 0;
 	tx_ring->next_to_clean = 0;
@@ -340,10 +343,10 @@ int mnic_setup_rx_resource(struct mnic_ring *rx_ring,int i,struct mnic_adapter *
 	size = sizeof(struct mnic_rx_buffer) * rx_ring->count;
 
 	rx_ring->rx_buf_info = vmalloc(size);
-
 	if (!rx_ring->rx_buf_info){
 		goto err;
 	}
+	pr_info("For buffer-> size: %d ring_count: %d",size,rx_ring->count);
 
 	/* Round up to nearest 4K */
 	rx_ring->size = rx_ring->count * sizeof(struct descriptor);
@@ -351,13 +354,16 @@ int mnic_setup_rx_resource(struct mnic_ring *rx_ring,int i,struct mnic_adapter *
 	rx_ring->desc = dma_alloc_coherent(dev, rx_ring->size,
 					   &rx_ring->dma, GFP_KERNEL);
 
+	pr_info("For descriptor-> size: %d ring_count: %d",rx_ring->size,rx_ring->count);
 	if (!rx_ring->desc){
 		goto err;
 	}
 
+	pr_info("Success: allocate rx_ring->desc");
+
 	//notify rx_desc_base
 	adapter->bar4->rx_desc_base[i] = rx_ring->dma;
-	pr_info("rx desc base %d is %llx",i,adapter->bar4->rx_desc_base[i]);
+	pr_info("rx desc base %d is %llx",i,rx_ring->dma);
 
 	rx_ring->next_to_alloc = 0;
 	rx_ring->next_to_clean = 0;
@@ -1036,41 +1042,49 @@ static int __mnic_open(struct net_device *ndev,bool resuming)
 	if(ret){
 		goto err_setup_tx;
 	}
+	pr_info("%s: mnic_setup_all_tx_resources done",__func__);
 
 	/* allocate receive descriptors*/
 	ret = mnic_setup_all_rx_resources(adapter);
 	if(ret){
 		goto err_setup_rx;
 	}
+	pr_info("%s: mnic_setup_all_rx_resources done",__func__);
 
 	//call mnic_desc_unused
 	for(i=0;i<adapter->num_rx_queues;i++){
 		struct mnic_ring *rx_ring = adapter->rx_ring[i];
 		mnic_alloc_rx_buffers(rx_ring,mnic_desc_unused(rx_ring),adapter);
 	}
-	
+	pr_info("%s: mnic_alloc_rx_buffer done",__func__);
+
 	ret = mnic_request_irq(adapter);
 	if(ret){
 		goto err_req_irq;
 	}
+	pr_info("%s: mnic_request_irq done",__func__);
 
 	/* Notify the stack of the actual queue counts.*/
 	ret = netif_set_real_num_tx_queues(adapter->ndev,adapter->num_tx_queues);
 	if(ret){
 		goto err_set_queues;
 	}
+	pr_info("%s: netif_set_real_num_tx_queues done",__func__);
 
 	ret = netif_set_real_num_rx_queues(adapter->ndev,adapter->num_rx_queues);
 	if(ret){
 		goto err_set_queues;
 	}
+	pr_info("%s: netif_set_real_num_rx_queues done",__func__);
 
 	for(i=0;i<adapter->num_q_vectors;i++){
 		napi_enable(&(adapter->q_vector[i]->napi));
 	}
+	pr_info("%s: napi_enable done",__func__);
 
 	//mnic_irq_enable(adpter);
 	netif_tx_start_all_queues(ndev);
+	pr_info("%s: netif_tx_start_all_queues done",__func__);
 	
 	/*if(!resuming){
 		pm_runtime_put(&pdev->dev);
@@ -1554,16 +1568,7 @@ static int mnic_alloc_q_vector(struct mnic_adapter *adapter,int v_count,int v_id
 	//size = struct_size(q_vector,ring,ring_count);
 	size = sizeof(struct mnic_q_vector)+(sizeof(struct mnic_ring)*ring_count);
 	
-	q_vector = adapter->q_vector[v_idx];
-	if (!q_vector) {
-		q_vector = kzalloc(size, GFP_KERNEL);
-	} else if (size > ksize(q_vector)) {
-		kfree_rcu(q_vector, rcu);
-		q_vector = kzalloc(size, GFP_KERNEL);
-	} else {
-		memset(q_vector, 0, size);
-	}
-
+	q_vector = kzalloc(size, GFP_KERNEL);
 	if(!q_vector){
 		return -ENOMEM;
 	}
