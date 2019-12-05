@@ -190,6 +190,8 @@ static int mnic_setup_tx_resource(struct mnic_ring *tx_ring,int i,struct mnic_ad
 	
 	pr_info("%s: start",__func__);
 
+	tx_ring->count = MNIC_DEFAULT_TXD;
+
 	size = sizeof(struct mnic_tx_buffer)*tx_ring->count;
 	pr_info("For buffer-> size: %d ring_count: %d",size,tx_ring->count);
 	
@@ -203,7 +205,7 @@ static int mnic_setup_tx_resource(struct mnic_ring *tx_ring,int i,struct mnic_ad
 	tx_ring->size = tx_ring->count*sizeof(struct descriptor);
 	tx_ring->size = ALIGN(tx_ring->size,4096);
 	
-	pr_info("For descriptor-> size: %d ring_count: %d",tx_ring->size,tx_ring->count);
+	pr_info("For descriptor-> size: %d ring_count: %lld",tx_ring->size,tx_ring->count);
 
 	tx_ring->desc = dma_alloc_coherent(dev,tx_ring->size,&tx_ring->dma,GFP_KERNEL);
 	if(!tx_ring->desc){
@@ -270,14 +272,12 @@ static void mnic_clean_rx_ring(struct mnic_ring *rx_ring)
 		dma_sync_single_range_for_cpu(rx_ring->dev,
 					      buffer_info->dma,
 					      buffer_info->page_offset,
-					      //やばいかも？
 					      2048,
 					      DMA_FROM_DEVICE);
 
 		/* free resources associated with mapping */
 		dma_unmap_page_attrs(rx_ring->dev,
 				     buffer_info->dma,
-				     //やばいかも
 				     2048,
 				     DMA_FROM_DEVICE,
 				     MNIC_RX_DMA_ATTR);
@@ -336,7 +336,7 @@ int mnic_setup_rx_resource(struct mnic_ring *rx_ring,int i,struct mnic_adapter *
 	int size;
 	struct device *dev = rx_ring->dev;
 
-	//rx_ring->count = MNIC_DEFAULT_RXD;
+	rx_ring->count = MNIC_DEFAULT_RXD;
 
 	pr_info("%s: start",__func__);
 
@@ -354,7 +354,7 @@ int mnic_setup_rx_resource(struct mnic_ring *rx_ring,int i,struct mnic_adapter *
 	rx_ring->desc = dma_alloc_coherent(dev, rx_ring->size,
 					   &rx_ring->dma, GFP_KERNEL);
 
-	pr_info("For descriptor-> size: %d ring_count: %d",rx_ring->size,rx_ring->count);
+	pr_info("For descriptor-> size: %d ring_count: %lld",rx_ring->size,rx_ring->count);
 	if (!rx_ring->desc){
 		goto err;
 	}
@@ -452,6 +452,7 @@ static int mnic_request_msix(struct mnic_adapter *adapter)
 		if(ret){
 			goto err_free;
 		}
+		pr_info("%s: made request_irq at %d \n",__func__,i);
 	}
 	
 	//mnic_configure_msix(adpter);
@@ -690,6 +691,7 @@ static bool mnic_alloc_mapped_page(struct mnic_ring *rx_ring,struct mnic_rx_buff
 
 	//finish this function if we already have page
 	if(likely(page)){
+		pr_info("%s: rx buffer is already allocated",__func__);
 		return true;
 	}
 	
@@ -700,7 +702,7 @@ static bool mnic_alloc_mapped_page(struct mnic_ring *rx_ring,struct mnic_rx_buff
 		return false;
 	}
 	
-	dma = dma_map_page_attrs(rx_ring->dev,page,0,PAGE_SIZE,DMA_FROM_DEVICE,MNIC_RX_DMA_ATTR);
+	dma = dma_map_page_attrs(rx_ring->dev,page,0,2048,DMA_FROM_DEVICE,MNIC_RX_DMA_ATTR);
 
 	if(dma_mapping_error(rx_ring->dev,dma)){
 		__free_page(page);
@@ -1361,10 +1363,10 @@ void mnic_down(struct mnic_adapter *adapter)
 	pr_info("%s: end\n",__func__);
 }
 
-static int __mnic_close(struct net_device *ndev)
+static int __mnic_close(struct net_device *ndev,bool suspending)
 {
 	int i;
-	struct mnic_adapter *adapter = netdev_priv(adapter);
+	struct mnic_adapter *adapter = netdev_priv(ndev);
 	struct pci_dev *pdev = adapter->pdev;
 
 	pr_info("%s: start\n",__func__);
