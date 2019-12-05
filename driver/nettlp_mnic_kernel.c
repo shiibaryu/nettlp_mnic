@@ -205,7 +205,7 @@ static int mnic_setup_tx_resource(struct mnic_ring *tx_ring,int i,struct mnic_ad
 	tx_ring->size = tx_ring->count*sizeof(struct descriptor);
 	tx_ring->size = ALIGN(tx_ring->size,4096);
 	
-	pr_info("For descriptor-> size: %d ring_count: %lld",tx_ring->size,tx_ring->count);
+	pr_info("For descriptor-> size: %lld ring_count: %d",tx_ring->size,tx_ring->count);
 
 	tx_ring->desc = dma_alloc_coherent(dev,tx_ring->size,&tx_ring->dma,GFP_KERNEL);
 	if(!tx_ring->desc){
@@ -354,7 +354,7 @@ int mnic_setup_rx_resource(struct mnic_ring *rx_ring,int i,struct mnic_adapter *
 	rx_ring->desc = dma_alloc_coherent(dev, rx_ring->size,
 					   &rx_ring->dma, GFP_KERNEL);
 
-	pr_info("For descriptor-> size: %d ring_count: %lld",rx_ring->size,rx_ring->count);
+	pr_info("For descriptor-> size: %lld ring_count: %d",rx_ring->size,rx_ring->count);
 	if (!rx_ring->desc){
 		goto err;
 	}
@@ -2023,7 +2023,6 @@ static void mnic_remove(struct pci_dev *pdev)
 	iounmap(adapter->bar0);
 
 	pci_release_regions(pdev);
-	free_netdev(dev);
 	pci_disable_device(pdev);
 
 	return;
