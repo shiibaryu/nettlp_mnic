@@ -281,8 +281,8 @@ static void mnic_clean_rx_ring(struct mnic_ring *rx_ring)
 				     2048,
 				     DMA_FROM_DEVICE,
 				     MNIC_RX_DMA_ATTR);
-		__page_frag_cache_drain(buffer_info->page,
-					buffer_info->pagecnt_bias);
+	/*	__page_frag_cache_drain(buffer_info->page,
+					buffer_info->pagecnt_bias);*/
 
 		i++;
 		if (i == rx_ring->count){
@@ -824,8 +824,7 @@ static bool mnic_can_reuse_rx_page(struct mnic_rx_buffer *rx_buffer)
 static bool mnic_add_rx_frag(struct mnic_ring *mnic_ring,struct mnic_rx_buffer *rx_buffer,struct descriptor *rx_desc,struct sk_buff *skb)
 {
 	struct page *page = rx_buffer->page;
-	//uint32_t size = le16_to_cpu(rx_desc->wb.upper.length);
-	uint32_t size = 2048; /*2048でほんとにいいのか問題*/
+	uint32_t size = 2048;
 #if (PAGE_SIZE < 8192)
 	unsigned int truesize = MNIC_RX_BUFSZ;
 #else

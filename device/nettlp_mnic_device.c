@@ -22,11 +22,11 @@
 #define TX_QUEUES   	8
 #define RX_QUEUES   	8
 
-#define BASE_SUM	16
 #define DESC_ENTRY_SIZE	256	
 
 #define BAR4_TX_DESC_OFFSET 	64
 #define BAR4_RX_DESC_OFFSET	128
+#define BASE_SUM	128
 
 #define likely(x) __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
@@ -35,7 +35,7 @@
 	(a - bar4 <= BAR4_TX_DESC_OFFSET)
 
 #define is_mwr_addr_rx_desc_ptr(bar4,a)		\
-	(a - bar4 <= BAR4_TX_DESC_OFFSET)
+	(a - bar4 <= BAR4_RX_DESC_OFFSET)
 
 struct tx_desc_ctl{
 	uint32_t tx_head_idx;
@@ -81,15 +81,6 @@ struct nettlp_mnic{
 #define _GNU_SOURCE
 	
 };
-
-static inline unsigned int get_bar4_offset(uintptr_t start,uintptr_t received)
-{
-	unsigned int offset;
-	
-	offset = (received - start - BASE_SUM)/8;
-	
-	return offset;
-}
 
 int tap_alloc(char *dev)
 {
@@ -243,6 +234,15 @@ void mnic_rx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 
 	mnic->rx_nt = nt;
 	/*mnic->rx_state[offset] = RX_STATE_READY;*/
+}
+
+static inline unsigned int get_bar4_offset(uintptr_t start,uintptr_t received)
+{
+	unsigned int offset;
+	
+	offset = (received - start - BASE_SUM)/8;
+	
+	return offset;
 }
 
 int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mh,void *m,size_t count,void *arg)
@@ -472,6 +472,8 @@ int main(int argc,char **argv)
                 return -1;
         }
         
+	mnic.tap_fd = tap_fd;
+
 	mnic_alloc(&mnic);
 
 	for(n=0;n<16;n++){
@@ -486,7 +488,6 @@ int main(int argc,char **argv)
 		}
 	}
 
-	mnic.tap_fd = tap_fd;
 	mnic.bar4_start = nettlp_msg_get_bar4_start(host);	
 	if(mnic.bar4_start == 0){
 		debug("failed to get BAR4 addr from %s\n",inet_ntoa(host));
