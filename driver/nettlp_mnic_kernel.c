@@ -1214,7 +1214,8 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 		dma_unmap_addr_set(tx_buff,dma,dma);
 	
 		tx_desc->addr = cpu_to_le64(dma);
-		tx_desc->length = size;
+		tx_desc->length = data_len;
+		pr_info("%s: skb dma addr is %llx, length is %d",__func__,dma,data_len);
 		
 		while(unlikely(size > MNIC_MAX_DATA_PER_TXD)){
 			//tx_desc->read.cmd_type_len = cpu_to_le32(cmd_type ^ MNIC_MAX_DATA_PER_TXD);
@@ -1232,7 +1233,8 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 			size -= MNIC_MAX_DATA_PER_TXD;
 
 			tx_desc->addr = cpu_to_le64(dma);
-			tx_desc->length = size;
+			tx_desc->length = data_len;
+			pr_info("%s: skb dma addr is %llx, length is %d",__func__,dma,data_len);
 		}
 	
 		if(likely(!data_len)){
