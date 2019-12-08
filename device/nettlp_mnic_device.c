@@ -90,7 +90,7 @@ int tap_alloc(char *dev)
         ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
         strncpy(ifr.ifr_name,dev,IFNAMSIZ);
 
-        int fd = open("/dev/net/tap",O_RDWR);
+        int fd = open("/dev/net/tun",O_RDWR);
         if(fd < 0){
                 perror("open");
                 return -1;
@@ -495,21 +495,31 @@ int main(int argc,char **argv)
 		return -1;
 	}
 
-	ret = nettlp_msg_get_msix_table(host,msix,16);
+	ret = nettlp_msg_get_msix_table(host,msix,2);
 	if(ret < 0){
 		debug("faled to get msix table from %s\n",inet_ntoa(host));
 		info("nettlp_msg_get_msix_table");
 	}	
 
-	for(i=0;i<8;i++){
+	/*for(i=0;i<8;i++){
 		*mnic.tx_irq = msix[i];
 		*mnic.rx_irq = msix[i+8];
 		mnic.tx_irq++;
 		mnic.rx_irq++;
-	}
+	}*/
+	*mnic.tx_irq = msix[0];
+	*mnic.tx_irq = msix[1];
 
 	info("Device is %04x",nt.requester);
 	info("BAR4 start adress is %#lx",mnic.bar4_start);	       
+	/*for(i=0;i<8;i++){
+		info("TX IRQ address is %#lx,data is 0x%08x",mnic.tx_irq->addr,mnic.tx_irq->data);
+		info("RX IRQ address is %#lx,data is 0x%08x",mnic.rx_irq->addr,mnic.rx_irq->data);
+		info("mnic_tx_irq: %p, rx_irq; %p",mnic.tx_irq,mnic.rx_irq);
+		mnic.tx_irq++;
+		mnic.rx_irq++;
+	}*/
+
 	info("TX IRQ address is %#lx,data is 0x%08x",mnic.tx_irq->addr,mnic.tx_irq->data);
 	info("RX IRQ address is %#lx,data is 0x%08x",mnic.rx_irq->addr,mnic.rx_irq->data);
 

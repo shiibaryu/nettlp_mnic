@@ -296,6 +296,7 @@ struct mnic_adapter{
 	
 	struct mnic_bar0 *bar0;
 	struct mnic_bar4 *bar4;
+	uint64_t bar4_start;
 	void *bar2;
 
 	uint16_t state;

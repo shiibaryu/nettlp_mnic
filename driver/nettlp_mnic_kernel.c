@@ -1094,6 +1094,8 @@ static int __mnic_open(struct net_device *ndev,bool resuming)
 		pm_runtime_put(&pdev->dev);
 	}*/
 
+	nettlp_msg_init(adapter->bar4_start,PCI_DEVID(adapter->pdev->bus->number,adapter->pdev->devfn),adapter->bar2);
+
 	pr_info("%s: end \n",__func__);
 	return 0;
 
@@ -1951,6 +1953,7 @@ static int mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 	adapter->bar0 = bar0;
 	adapter->bar2 = bar2;	
 	adapter->bar4 = bar4;
+	adapter->bar4_start = bar4_start;
 
 	mnic_get_mac(ndev->dev_addr,adapter->bar0->srcmac);	
 	if(!is_valid_ether_addr(ndev->dev_addr)){
@@ -1975,7 +1978,6 @@ static int mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 		goto err7;
 	}
 
-	nettlp_msg_init(bar4_start,PCI_DEVID(pdev->bus->number,pdev->devfn),bar2);
 
 	//dev_pm_set_driver_flags(&pdev->dev,DPM_FLAG_NEVER_SKIP);
 	//pm_runtime_put_noidle(&pdev->dev);
