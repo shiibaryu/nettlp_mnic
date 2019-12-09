@@ -1,5 +1,6 @@
 # nettlp_mnic
 
 ## TO DO
-RSSの実装・run_cbのマルチスレッド化 <br>
-irq周りのカーネルパニック
+msixのテーブル・run_cbのマルチスレッド化 <br>
+パケット吐き<br>
+RSS<br>
