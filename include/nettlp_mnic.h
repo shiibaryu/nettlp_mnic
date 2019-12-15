@@ -55,6 +55,7 @@
 */
 
 #define MNIC_RX_DMA_ATTR (DMA_ATTR_SKIP_CPU_SYNC | DMA_ATTR_WEAK_ORDERING)
+
 struct mnic_adapter adapter;
 
 struct descriptor{

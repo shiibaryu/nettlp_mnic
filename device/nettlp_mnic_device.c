@@ -8,6 +8,7 @@
 #include <sys/uio.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/sysinfo.h>
 #include <arpa/inet.h>
 #include <linux/if.h>
 #include <linux/if_tun.h>
@@ -17,6 +18,8 @@
 
 #include <libtlp.h>
 #include "nettlp_mnic_device.h"
+
+#define NUM_OF_CORE	8	
 
 #define Q_VECTORS	16
 #define TX_QUEUES   	8
@@ -37,6 +40,7 @@
 #define is_mwr_addr_rx_desc_ptr(bar4,a)		\
 	(a - bar4 <= BAR4_RX_DESC_OFFSET)
 
+
 struct tx_desc_ctl{
 	uint32_t tx_head_idx;
 	uintptr_t tx_desc_head;
@@ -49,6 +53,14 @@ struct rx_desc_ctl{
 	uintptr_t rx_desc_tail;
 };
 
+struct tap_rx_ctl{
+	int tap_fd;
+	int *rx_state;
+	struct nettlp *rx_nt;
+	struct descriptor *rx_desc;
+	struct nettlp_msix *rx_irq;
+	struct rx_desc_ctl *rxd_ctl;
+};
 struct descriptor{
 	uint64_t addr;
 	uint64_t length;
@@ -74,15 +86,15 @@ struct nettlp_mnic{
 	
 	uint16_t write_cnt;
 	uint8_t q_offset;
-	int rx_state[8];
+	int rx_state[NUM_OF_CORE];
 #define RX_STATE_INIT	0
 #define RX_STATE_READY  1
 #define RX_STATE_BUSY   2
 #define RX_STATE_DONE	3
 	uintptr_t *rx_desc_addr;
 #define _GNU_SOURCE
-	
 };
+
 
 int tap_alloc(char *dev)
 {
@@ -119,7 +131,10 @@ int tap_up(char *dev)
                 return -1;
         }
 
-	setsockopt(fd,SOL_SOCKET,SO_INCOMING_CPU,&len,i);
+	//set an option for a cpu affinity of socket
+	if(setsockopt(fd,SOL_SOCKET,SO_INCOMING_CPU,&len,i)<0){
+		perror("setsockopt");
+	}
 
         memset(&ifr,0,sizeof(ifr));
         ifr.ifr_flags = IFF_UP;
@@ -234,7 +249,7 @@ void mnic_rx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 
 		if(rxd_ctl->rx_tail_idx > DESC_ENTRY_SIZE){	
 			rxd_ctl->rx_tail_idx = 0;
-			rxd_ctl->rx_tail_head = *rx_desc_base;
+			rxd_ctl->rx_desc_tail = *rx_desc_base;
 		}
 		/*
 		if(rxd_ctl->rx_head_idx > DESC_ENTRY_SIZE){	
@@ -302,16 +317,17 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mh,void *m,size_t count
 void *nettlp_mnic_tap_read_thread(void *arg)
 {
 	int ret,pktlen;
-	int iphdrlen;
-	unsigned int q_number;
-	struct nettlp_mnic *mnic = arg;
-	unsigned char *data;
-	unsigned char *buf = (unsigned char *)malloc(65536);
-	uintptr_t *rxd_addr;
-	struct descriptor *rx_desc;
-	struct nettlp_msix *rx_irq;
-	//struct descriptor *desc = mnic->rx_desc;
-	struct pollfd x[1] = {{.fd = mnic->tap_fd, .events = POLLIN}};
+	int q_number = sched_getcpu();
+	struct tap_rx_ctl *tap_rx_ctl = arg;
+	char buf[4096];
+	uintptr_t rxd_addr;
+	int tap_fd = tap_rx_ctl->tap_fd;
+	int *rx_state = tap_rx_ctl->rx_state;
+	struct descriptor *rx_desc = tap_rx_ctl->rx_desc;
+	struct nettlp_msix *rx_irq = tap_rx_ctl->rx_irq;
+	struct rx_desc_ctl *rxd_ctl = tap_rx_ctl->rxd_ctl;
+	struct nettlp *rx_nt = tap_rx_ctl->rx_nt;
+	struct pollfd x[1] = {{.fd = tap_rx_ctl->tap_fd, .events = POLLIN}};
 
 	while(1){
 		if(caught_signal){
@@ -328,46 +344,21 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 			continue;
 		}
 
-		//-----------------------------------------------------------			
-		//pktlen = recvfrom(mnic->tap_fd,buf,65536,0,NULL,NULL);
-		pktlen = read(mnic->tap_fd,buf,sizeof(*buf));
+		pktlen = read(tap_fd,buf,sizeof(*buf));
 		if(pktlen < 0){
 			perror("read");
 			continue;
 		}
-		/*
-		struct ethhdr *eth = (struct ethhdr *)(buf);
-		q_number = calc_rss(eth->h_source);
-		
-		rx_irq = mnic->rx_irq + q_number;
-		rx_desc = mnic->rx_desc[q_number];
-		rxd_addr = mnic->rx_desc_addr + q_number;
-			
-		struct iphdr *ip = (struct iphdr *)(buf + sizeof(struct ethhdr));
-		iphdrlen = ip->ihl*4;
-		data = (buf + iphdrlen + sizeof(struct ethhdr) + sizeof(struct udphdr));
-		data_len = pktlen - (iphdrlen + sizeof(struct ethhdr) + sizeof(struct udphdr));
-		*/
-		/*
-		pktlen = read(mnic->tap_fd,buf,sizeof(*buf));
-		if(pktlen < 0){
-			perror("read");
+
+		if(*rx_state != RX_STATE_READY){
 			continue;
 		}
-		*/
 
-		/*decide a quque using rss*/
-		
-
-		//---------------------------------------------------------------
-		
-		if(mnic->rx_state[q_number] != RX_STATE_READY){
-			continue;
-		}
-		mnic->rx_state[q_number] = RX_STATE_READY;
+		*rx_state = RX_STATE_READY;
 		rxd_addr = rxd_ctl->rx_desc_head;
 		
-		ret = dma_write(mnic->rx_nt,rxd_ctl->rx_desc_head,data,data_len);
+		info("dma_write");	
+		ret = dma_write(rx_nt,rxd_ctl->rx_desc_head,buf,pktlen);
 		if(ret < 0){
 			debug("buf to rx_desc: failed to dma_write to %lx",rx_desc->addr);
 			continue;
@@ -376,76 +367,26 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 		rxd_ctl->rx_desc_head += sizeof(struct descriptor);
 		rxd_ctl->rx_head_idx++;
 		
-		/*
 		//write back
-		rx_desc->length = data_len;
-		ret = dma_write(mnic->rx_nt,*rxd_addr,,sizeof(struct descriptor));
+		rx_desc->length = pktlen;
+		ret = dma_write(rx_nt,rxd_addr,rx_desc,sizeof(struct descriptor));
 		if(ret < 0){
-			debug("rx_desc write_back: failed to dma_write to %lx",*rxd_addr);
+			debug("rx_desc write_back: failed to dma_write to %lx",rxd_addr);
 			continue;
 		}
-		*/
 
 		//generate rx interrupt
-		ret = dma_write(mnic->rx_nt,rx_irq->addr,&rx_irq->data,sizeof(rx_irq->data));
+		ret = dma_write(rx_nt,rx_irq->addr,&rx_irq->data,sizeof(rx_irq->data));
 		if(ret < 0){
 			fprintf(stderr,"failed to generate Rx Interrupt\n");
 			perror("dma_write for rx interrupt");
 		}
 
 		info("RX done. DMA write to %lx %d byte",rxd_ctl->rx_desc_head,pktlen);
-		mnic->rx_state[q_number] = RX_STATE_DONE;
-		/*
-		wr = mnic->write_cnt;
-		q_offset = mnic->q_offset;
-		rxd_addr = mnic->rx_desc_addr + q_offset;
-		rx_irq = mnic->rx_irq + q_offset;
-		buf = mnic->rx_buf + q_offset;
-		rx_desc = mnic->rx_desc[q_offset];
-
-		for(i=0;i<wr;i++){
-			pktlen = read(mnic->tap_fd,buf,sizeof(*buf));
-			if(pktlen<0){
-				perror("read");
-				continue;
-			}
-
-			if(mnic->rx_state[q_offset] != RX_STATE_READY){
-				continue;
-			}
-			mnic->rx_state[q_offset] = RX_STATE_BUSY;
-
-			// rssいれるならここ
-
-			ret = dma_write(mnic->rx_nt,rx_desc->addr,buf,pktlen);
-			if(ret < 0){
-				debug("failed to dma_write pkt to %lx",rx_desc->addr);
-				continue;
-			}
-			mnic->rx_desc.length = pktlen;
-			ret = dma_write(mnic->rx_nt,*rxd_addr,mnic->rx_desc,sizeof(struct descriptor));
-			if(ret < sizeof(struct descriptor)){
-				fprintf(stderr,"failed to write rx desc to %#lx\n",*rxd_addr);
-				continue;
-			}
-
-			rx_desc++;
-		}
-		*/
-
-		//generate rx interrupt
-		/*ret = dma_write(mnic->rx_nt,rx_irq->addr,&rx_irq->data,sizeof(rx_irq->data));
-		if(ret < 0){
-			fprintf(stderr,"failed to generate Rx Interrupt\n");
-			perror("dma_write for rx interrupt");
-		}
-
-		info("RX done. DMA write to %lx %d byte",*rxd_addr,pktlen);
-		mnic->rx_state[q_offset] = RX_STATE_DONE;
-		*/
+		*rx_state = RX_STATE_DONE;
 	}
-
-	info("end");
+	
+	info("end %d",q_number);
 	return NULL;
 }
 
@@ -507,7 +448,6 @@ void usage()
 		niantic does not prefetch freelist descriptors(on demand)
 		niantic does not seem to be doing any batching of rx descriptor write-back.
 	*/
-
 int main(int argc,char **argv)
 {
         int opt,ret,tap_fd,i,n;
@@ -515,8 +455,10 @@ int main(int argc,char **argv)
 	struct nettlp nt,nts[16],*nts_ptr[16];
 	struct nettlp_cb cb;
 	struct in_addr host;
+	struct tap_rx_ctl tap_rx_ctl[8];
 	struct nettlp_mnic mnic;	
 	struct nettlp_msix msix[16];
+	cpu_set_t target_cpu_set;
 	pthread_t rx_tid[8]; //tap_read_thread
 
 	memset(&nt,0,sizeof(nt));
@@ -571,6 +513,10 @@ int main(int argc,char **argv)
 
 	mnic_alloc(&mnic);
 
+	for(n=0;n<8;n++){
+		mnic.rx_state[n] = 0;
+	}
+
 	struct nettlp_msix *tx_irq = mnic.tx_irq;
 	struct nettlp_msix *rx_irq = mnic.rx_irq;
 
@@ -623,26 +569,34 @@ int main(int argc,char **argv)
 		debug("failed to set signal");
 		return -1;
 	}
+	
+	for(i=0;i<1;i++){
+		info("create %d tap_read thread",i);
 
-	info("create tap read thread");
+		tap_rx_ctl[i].tap_fd = mnic.tap_fd;
+		tap_rx_ctl[i].rx_state = &mnic.rx_state[i];
+		tap_rx_ctl[i].rx_irq = mnic.rx_irq + i;
+		tap_rx_ctl[i].rx_desc = mnic.rx_desc[i];
+		tap_rx_ctl[i].rxd_ctl = mnic.rx_desc_ctl + i;
 
-	for(i=0;i<8;i++){
-		pthread_create(&rx_tid[i],NULL,nettlp_mnic_tap_read_thread,&mnic);
-		
+		if((ret = pthread_create(&rx_tid[i],NULL,nettlp_mnic_tap_read_thread,&tap_rx_ctl[i])) != 0){
+			debug("%d thread failed to be created",i);
+		}
+
 		CPU_ZERO(&target_cpu_set);
 		CPU_SET(i,&target_cpu_set);
-		pthread_setaffinity_np(&rx_tid[i],sizeof(cpu_set_t),&target_cpu_set);
+		pthread_setaffinity_np(rx_tid[i],sizeof(cpu_set_t),&target_cpu_set);
 	}
-	
+
 	info("start nettlp callback");
 	memset(&cb,0,sizeof(cb));
 	cb.mwr = nettlp_mnic_mwr;
 	nettlp_run_cb(nts_ptr,16,&cb,&mnic);
 
-	info("nettlp callback done");
-
-	for(i=0;i<8;i++){
-		pthread_join(rx_tid[i],NULL);
+	for(i=0;i<1;i++){
+		if((ret = pthread_join(rx_tid[i],NULL)) != 0){
+			debug("%d thread failed to be joined",i);
+		}
 	}
 
         return 0;
