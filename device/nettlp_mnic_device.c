@@ -297,6 +297,7 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mh,void *m,size_t count
 		memcpy(&rxd_ctl->rx_desc_head,m,8);
 		info("Queue %d: RX desc base is %lx",mnic->rx_queue_id,*rxd_base);
 		mnic->rx_queue_id++;
+		rxd_ctl->rx_desc_tail = rxd_ctl->rx_desc_head;
 	}
 	else{
 		offset = get_bar4_offset(mnic->bar4_start,dma_addr);
