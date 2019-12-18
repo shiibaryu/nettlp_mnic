@@ -27,8 +27,8 @@
 
 #define DESC_ENTRY_SIZE	256	
 
-#define BAR4_TX_DESC_OFFSET 	64
-#define BAR4_RX_DESC_OFFSET	128
+#define BAR4_TX_DESC_OFFSET 	56	
+#define BAR4_RX_DESC_OFFSET	120
 #define BASE_SUM	128
 
 #define likely(x) __builtin_expect(!!(x), 1)
@@ -131,11 +131,10 @@ int tap_up(char *dev)
                 return -1;
         }
 
-	/*set an option for a cpu affinity of socket
+	/*set an option for a cpu affinity of socket*/
 	if(setsockopt(fd,SOL_SOCKET,SO_INCOMING_CPU,&len,i)<0){
 		perror("setsockopt");
 	}
-	*/
 
         memset(&ifr,0,sizeof(ifr));
         ifr.ifr_flags = IFF_UP;
@@ -171,6 +170,7 @@ void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 	tail = addr + (sizeof(struct descriptor)*idx);
 	
 	while(txd_ctl->tx_head_idx != idx){
+	 	info("dma_write, offset is %d",offset);
 		ret = dma_read(nt,txd_ctl->tx_desc_head,&desc,sizeof(desc));
 		if(ret < sizeof(struct descriptor)){
 			if(ret < sizeof(struct descriptor)){
@@ -179,12 +179,14 @@ void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 			}
 		}
 		
+	 	info("dma_read");
 		ret = dma_read(nt,desc.addr,buf,desc.length);
 		if(ret < desc.length){
 			fprintf(stderr,"failed to read tx pkt from %#lx, %lu-byte",desc.addr,desc.length);
 				goto tx_end;
 		}
-	
+
+	 	info("write");
 		ret = write(mnic->tap_fd,buf,desc.length);
 		if(ret < desc.length){
 			fprintf(stderr,"failed to read tx pkt from %lx,%lu-bytes\n",desc.addr,desc.length);
@@ -202,6 +204,7 @@ void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 	}
 
 tx_end:
+	 info("dma_write");
 	ret = dma_write(nt,tx_irq->addr,&tx_irq->data,sizeof(tx_irq->data));
 	if(ret < 0){
 		fprintf(stderr,"failed to send tx interrupt\n");
@@ -218,7 +221,7 @@ void mnic_rx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 	struct descriptor *rx_desc = mnic->rx_desc[offset];
 	uintptr_t *rx_desc_base = mnic->rx_desc_base + offset;
 	struct rx_desc_ctl *rxd_ctl = mnic->rx_desc_ctl + offset;
-	
+
 	if(*rx_desc_base == 0){
 		fprintf(stderr,"rx_desc base is 0\n");
 		return;
@@ -228,22 +231,14 @@ void mnic_rx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 		sched_yield();
 	}
 
-	//addr = rxd_ctl->rx_desc_head + (sizeof(struct descriptor)*idx);
-	//addr = rxd_ctl->rx_desc_head;
-	
 	while(rxd_ctl->rx_tail_idx != idx){
-		//ret = dma_read(nt,rxd_ctl->rx_desc_head,rx_desc,sizeof(struct descriptor));
 		ret = dma_read(nt,rxd_ctl->rx_desc_tail,rx_desc,sizeof(struct descriptor));
 		if(ret < sizeof(struct descriptor)){
-			fprintf(stderr,"failed to read rx desc from %#lx\n",rxd_ctl->rx_desc_head);
+			fprintf(stderr,"failed to read rx desc from %#lx\n",rxd_ctl->rx_desc_tail);
 			return;
 		}
+		info("dma_read addr at queue %d is %#lx",offset,rx_desc->addr);
 		
-		/* 	
-		rxd_ctl->rx_desc_head += sizeof(struct descriptor);
-		rxd_ctl->rx_head_idx++;
-		rx_desc++;
-		*/
 		rx_desc++;
 		rxd_ctl->rx_tail_idx++;
 		rxd_ctl->rx_desc_tail += sizeof(struct descriptor);
@@ -252,13 +247,10 @@ void mnic_rx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 			rxd_ctl->rx_tail_idx = 0;
 			rxd_ctl->rx_desc_tail = *rx_desc_base;
 		}
-		/*
-		if(rxd_ctl->rx_head_idx > DESC_ENTRY_SIZE){	
-			rxd_ctl->rx_head_idx = 0;
-			rxd_ctl->rx_desc_head = *rx_desc_base;
-		}
-		*/
 	}
+	
+	info("rx_head index is %d",rxd_ctl->rx_head_idx);
+	info("rx_tail index is %d",rxd_ctl->rx_tail_idx);
 
 	mnic->rx_nt = nt;
 	mnic->rx_state[offset] = RX_STATE_READY;
@@ -303,6 +295,7 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mh,void *m,size_t count
 	else{
 		offset = get_bar4_offset(mnic->bar4_start,dma_addr);
 		memcpy(&idx,m,sizeof(idx));
+
 		if(offset < 8){
 			mnic_tx(idx,nt,mnic,offset);
 			return 0;
@@ -337,13 +330,13 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 		}
 		
 		ret = poll(x,1,500);
-		if(ret == 0 || !(x[0].revents & POLLIN)){
-			continue;
-		}
-	
 		if(ret < 0){
 			break;
 		}	
+
+		if(ret == 0 || !(x[0].revents & POLLIN)){
+			continue;
+		}
 
 		if(rxd_ctl->rx_head_idx > rxd_ctl->rx_tail_idx){
 			debug("rx desc head is over the tail");
