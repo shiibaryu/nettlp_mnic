@@ -131,10 +131,11 @@ int tap_up(char *dev)
                 return -1;
         }
 
-	//set an option for a cpu affinity of socket
+	/*set an option for a cpu affinity of socket
 	if(setsockopt(fd,SOL_SOCKET,SO_INCOMING_CPU,&len,i)<0){
 		perror("setsockopt");
 	}
+	*/
 
         memset(&ifr,0,sizeof(ifr));
         ifr.ifr_flags = IFF_UP;
@@ -336,13 +337,17 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 		}
 		
 		ret = poll(x,1,500);
-		if(ret < 0 || ret == 0 || !(x[0].revents & POLLIN)){
+		if(ret == 0 || !(x[0].revents & POLLIN)){
 			continue;
 		}
-		
+	
+		if(ret < 0){
+			break;
+		}	
+
 		if(rxd_ctl->rx_head_idx > rxd_ctl->rx_tail_idx){
 			debug("rx desc head is over the tail");
-			continue;
+			break;
 		}
 
 		pktlen = read(tap_fd,buf,sizeof(*buf));
@@ -546,6 +551,9 @@ int main(int argc,char **argv)
 		info("nettlp_msg_get_msix_table");
 	}	
 
+	for(i=0;i<16;i++){
+		info("msix addr at %d is %#lx",i,msix[i].addr);
+	}
 	for(i=0;i<8;i++){
 		*tx_irq = msix[i];
 		*rx_irq = msix[i+8];
@@ -570,10 +578,8 @@ int main(int argc,char **argv)
 		debug("failed to set signal");
 		return -1;
 	}
-	
-	for(i=0;i<1;i++){
-		info("create %d tap_read thread",i);
 
+	for(i=0;i<8;i++){
 		tap_rx_ctl[i].tap_fd = mnic.tap_fd;
 		tap_rx_ctl[i].rx_state = &mnic.rx_state[i];
 		tap_rx_ctl[i].rx_irq = mnic.rx_irq + i;
@@ -594,7 +600,7 @@ int main(int argc,char **argv)
 	cb.mwr = nettlp_mnic_mwr;
 	nettlp_run_cb(nts_ptr,16,&cb,&mnic);
 
-	for(i=0;i<1;i++){
+	for(i=0;i<8;i++){
 		if((ret = pthread_join(rx_tid[i],NULL)) != 0){
 			debug("%d thread failed to be joined",i);
 		}

@@ -1062,11 +1062,13 @@ static int __mnic_open(struct net_device *ndev,bool resuming)
 	}
 	pr_info("%s: mnic_alloc_rx_buffer done",__func__);
 
+	/*
 	ret = mnic_request_irq(adapter);
 	if(ret){
 		goto err_req_irq;
 	}
 	pr_info("%s: mnic_request_irq done",__func__);
+	*/
 
 	/* Notify the stack of the actual queue counts.*/
 	ret = netif_set_real_num_tx_queues(adapter->ndev,adapter->num_tx_queues);
@@ -1081,20 +1083,18 @@ static int __mnic_open(struct net_device *ndev,bool resuming)
 	}
 	pr_info("%s: netif_set_real_num_rx_queues done",__func__);
 
+	/*
 	for(i=0;i<adapter->num_q_vectors;i++){
 		napi_enable(&(adapter->q_vector[i]->napi));
 	}
 	pr_info("%s: napi_enable done",__func__);
+	*/
 
 	//mnic_irq_enable(adpter);
 	netif_tx_start_all_queues(ndev);
 	pr_info("%s: netif_tx_start_all_queues done",__func__);
 	
-	/*if(!resuming){
-		pm_runtime_put(&pdev->dev);
-	}*/
-
-	nettlp_msg_init(adapter->bar4_start,PCI_DEVID(adapter->pdev->bus->number,adapter->pdev->devfn),adapter->bar2);
+	//nettlp_msg_init(adapter->bar4_start,PCI_DEVID(adapter->pdev->bus->number,adapter->pdev->devfn),adapter->bar2);
 
 	pr_info("%s: end \n",__func__);
 	return 0;
@@ -1103,11 +1103,12 @@ err_set_queues:
 	pr_info("%s:err_set_queues",__func__);
 	mnic_free_irq(adapter);
 
+/*
 err_req_irq:
 	pr_info("%s:err_req_irq",__func__);
-	/*mnic_release_hw_control(adapter);
-	mnic_power_down_link(adapter);*/
 	mnic_free_all_rx_resources(adapter);
+*/
+
 err_setup_rx:
 	pr_info("%s:err_setup_rx",__func__);
 	mnic_free_all_tx_resources(adapter);
@@ -1348,7 +1349,8 @@ void mnic_down(struct mnic_adapter *adapter)
 
 	netif_carrier_off(ndev);
 	netif_tx_stop_all_queues(ndev);
-	
+
+	/*	
 	for(i=0;i<adapter->num_q_vectors;i++){
 		synchronize_irq(adapter->msix_entries[i].vector);
 	}
@@ -1359,6 +1361,7 @@ void mnic_down(struct mnic_adapter *adapter)
 			napi_disable(&adapter->q_vector[i]->napi);
 		}
 	}
+	*/
 
 	mnic_clean_all_tx_rings(adapter);
 	mnic_clean_all_rx_rings(adapter);
@@ -1379,7 +1382,7 @@ static int __mnic_close(struct net_device *ndev,bool suspending)
 	}
 
 	mnic_down(adapter);
-	mnic_free_irq(adapter);
+	//mnic_free_irq(adapter);
 
 	mnic_free_all_tx_resources(adapter);
 	mnic_free_all_rx_resources(adapter);
@@ -1842,7 +1845,7 @@ static int mnic_sw_init(struct mnic_adapter *adapter)
 
 static int mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 {
-	int ret;
+	int i,ret;
 	int pci_using_dac;	
 	void *bar0,*bar2,*bar4;
 	uint64_t bar0_start,bar0_len;
@@ -1975,17 +1978,33 @@ static int mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 
 	ret = register_netdev(ndev);
 	if(ret){
-		goto err7;
+		goto err10;
 	}
 
+	/*------------------------------------------------------*/
 
-	//dev_pm_set_driver_flags(&pdev->dev,DPM_FLAG_NEVER_SKIP);
-	//pm_runtime_put_noidle(&pdev->dev);
+	/*request irq for nettlp_msg_init*/
+	ret = mnic_request_irq(adapter);
+	if(ret){
+		goto err10;
+	}
+	pr_info("%s: mnic_request_irq done",__func__);
+
+	for(i=0;i<adapter->num_q_vectors;i++){
+		napi_enable(&(adapter->q_vector[i]->napi));			
+	}
+	pr_info("%s: napi_enable done",__func__);
+
+	nettlp_msg_init(adapter->bar4_start,PCI_DEVID(adapter->pdev->bus->number,adapter->pdev->devfn),adapter->bar2);
+	/*------------------------------------------------------*/
 
 	pr_info("%s: probe finished.",__func__);
 	
 	return 0;
 
+err10:
+	pr_info("%s:err_req_irq",__func__);
+	//mnic_free_irq(adapter);
 err9:
 	mnic_clear_interrupt_scheme(adapter);
 //err8:
@@ -2010,12 +2029,26 @@ err1:
 
 static void mnic_remove(struct pci_dev *pdev)
 {
+	int i;
 	struct net_device *dev = pci_get_drvdata(pdev);
 	struct mnic_adapter *adapter = netdev_priv(dev);
 
 	pr_info("start remove pci config");
 
 	nettlp_msg_fini();
+
+	for(i=0;i<adapter->num_q_vectors;i++){
+		synchronize_irq(adapter->msix_entries[i].vector);
+	}
+
+	for(i=0;i<adapter->num_q_vectors;i++){
+		if(adapter->q_vector[i]){
+			napi_synchronize(&adapter->q_vector[i]->napi);
+			napi_disable(&adapter->q_vector[i]->napi);
+		}
+	}
+
+	mnic_free_irq(adapter);
 
 	unregister_netdev(dev);
 
