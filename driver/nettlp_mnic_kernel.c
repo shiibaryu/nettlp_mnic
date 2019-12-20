@@ -643,6 +643,7 @@ static void mnic_pull_tail(struct mnic_ring *rx_ring,struct descriptor *rx_desc,
 	
 	pr_info("%s: end \n",__func__);
 }
+
 static bool mnic_cleanup_headers(struct mnic_ring *rx_ring,struct descriptor *rx_desc,struct sk_buff *skb)
 {
 	pr_info("%s: start \n",__func__);
@@ -742,6 +743,7 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 		}
 
 		rx_desc->addr = cpu_to_le64(rb->dma + rb->page_offset);
+		pr_info("%s: rb->dma is %#llx, rx_desc->addr is %#llx",__func__,rb->dma,rx_desc->addr);
 		
 		rx_desc++;
 		rb++;
@@ -766,6 +768,7 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 		//notify rx tail
 		adapter->bar4->rx_desc_tail = i;
 		pr_info("rx descriptor tail is %d",i);
+		msleep(8000);
 	}
 
 	pr_info("%s: end \n",__func__);
@@ -912,7 +915,7 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 			cleaned_count = 0;			
 		}
 
-		//dma_rmb();
+		dma_rmb();
 
 		rx_desc = MNIC_RX_DESC(rx_ring,rx_ring->next_to_clean);
 		

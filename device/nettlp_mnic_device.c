@@ -56,6 +56,7 @@ struct rx_desc_ctl{
 struct tap_rx_ctl{
 	int tap_fd;
 	int *rx_state;
+	pthread_t tid;
 	struct nettlp *rx_nt;
 	struct descriptor *rx_desc;
 	struct nettlp_msix *rx_irq;
@@ -156,7 +157,6 @@ void signal_handler(int signal)
 	nettlp_stop_cb();
 }
 
-//rx_desc
 void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned int offset)
 {
 	int ret;
@@ -218,6 +218,7 @@ tx_end:
 void mnic_rx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned int offset)
 {
 	int ret;
+	int cpu = sched_getcpu();
 	struct descriptor *rx_desc = mnic->rx_desc[offset];
 	uintptr_t *rx_desc_base = mnic->rx_desc_base + offset;
 	struct rx_desc_ctl *rxd_ctl = mnic->rx_desc_ctl + offset;
@@ -230,20 +231,20 @@ void mnic_rx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 	while(mnic->rx_state[offset] != RX_STATE_DONE && mnic->rx_state[offset] != RX_STATE_INIT){
 		sched_yield();
 	}
-
+	
 	while(rxd_ctl->rx_tail_idx != idx){
 		ret = dma_read(nt,rxd_ctl->rx_desc_tail,rx_desc,sizeof(struct descriptor));
 		if(ret < sizeof(struct descriptor)){
 			fprintf(stderr,"failed to read rx desc from %#lx\n",rxd_ctl->rx_desc_tail);
 			return;
 		}
-		info("dma_read addr at queue %d is %#lx",offset,rx_desc->addr);
+		info("dma_read addr at queue %d & cpu %d is %#lx",offset,cpu,rx_desc->addr);
 		
 		rx_desc++;
 		rxd_ctl->rx_tail_idx++;
 		rxd_ctl->rx_desc_tail += sizeof(struct descriptor);
-
-		if(rxd_ctl->rx_tail_idx > DESC_ENTRY_SIZE){	
+	
+		if(rxd_ctl->rx_tail_idx >= DESC_ENTRY_SIZE){	
 			rxd_ctl->rx_tail_idx = 0;
 			rxd_ctl->rx_desc_tail = *rx_desc_base;
 		}
@@ -260,6 +261,8 @@ static inline unsigned int get_bar4_offset(uintptr_t start,uintptr_t received)
 {
 	unsigned int offset;
 	
+	info("start %#lx, received %#lx",start,received);
+
 	offset = (received - start - BASE_SUM)/8;
 	
 	return offset;
@@ -279,7 +282,7 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mh,void *m,size_t count
 		uintptr_t *txd_base = mnic->tx_desc_base + mnic->tx_queue_id;
 		struct tx_desc_ctl *txd_ctl = mnic->tx_desc_ctl + mnic->tx_queue_id;
 		memcpy(txd_base,m,8);
-		memcpy(&txd_ctl->tx_desc_head,m,8);
+		txd_ctl->tx_desc_head = *txd_base;
 		info("Queue %d: TX desc base is %lx",mnic->tx_queue_id,*txd_base);
 		mnic->tx_queue_id++;
 	}
@@ -287,15 +290,14 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mh,void *m,size_t count
 		uintptr_t *rxd_base = mnic->rx_desc_base + mnic->rx_queue_id;
 		struct rx_desc_ctl *rxd_ctl = mnic->rx_desc_ctl + mnic->rx_queue_id;
 		memcpy(rxd_base,m,8);
-		memcpy(&rxd_ctl->rx_desc_head,m,8);
+		rxd_ctl->rx_desc_head = *rxd_base;
+		rxd_ctl->rx_desc_tail = *rxd_base;
 		info("Queue %d: RX desc base is %lx",mnic->rx_queue_id,*rxd_base);
 		mnic->rx_queue_id++;
-		rxd_ctl->rx_desc_tail = rxd_ctl->rx_desc_head;
 	}
 	else{
 		offset = get_bar4_offset(mnic->bar4_start,dma_addr);
 		memcpy(&idx,m,sizeof(idx));
-
 		if(offset < 8){
 			mnic_tx(idx,nt,mnic,offset);
 			return 0;
@@ -303,6 +305,7 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mh,void *m,size_t count
 			mnic_rx(idx,nt,mnic,offset - 8);
 			return 0;
 		}
+		
 	}
 
 	return 0;
@@ -312,9 +315,9 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mh,void *m,size_t count
 void *nettlp_mnic_tap_read_thread(void *arg)
 {
 	int ret,pktlen;
-	int q_number = sched_getcpu();
+	int cpu = sched_getcpu();
 	struct tap_rx_ctl *tap_rx_ctl = arg;
-	char buf[4096];
+	char buf[2048];
 	uintptr_t rxd_addr;
 	int tap_fd = tap_rx_ctl->tap_fd;
 	int *rx_state = tap_rx_ctl->rx_state;
@@ -338,11 +341,11 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 			continue;
 		}
 
-		if(rxd_ctl->rx_head_idx > rxd_ctl->rx_tail_idx){
-			debug("rx desc head is over the tail");
+		if(rxd_ctl->rx_tail_idx == 0 && rxd_ctl->rx_head_idx == 0){
+			debug("rx_desc is not prepared yet");
 			break;
 		}
-
+		
 		pktlen = read(tap_fd,buf,sizeof(*buf));
 		if(pktlen < 0){
 			perror("read");
@@ -352,12 +355,12 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 		if(*rx_state != RX_STATE_READY){
 			continue;
 		}
-
-		*rx_state = RX_STATE_READY;
+		
+		*rx_state = RX_STATE_BUSY;
 		rxd_addr = rxd_ctl->rx_desc_head;
 		
-		info("dma_write");	
-		ret = dma_write(rx_nt,rxd_ctl->rx_desc_head,buf,pktlen);
+		//ret = dma_write(rx_nt,rxd_ctl->rx_desc_head,buf,pktlen);
+		ret = dma_write(rx_nt,rx_desc->addr,buf,pktlen);
 		if(ret < 0){
 			debug("buf to rx_desc: failed to dma_write to %lx",rx_desc->addr);
 			continue;
@@ -365,14 +368,17 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 
 		rxd_ctl->rx_desc_head += sizeof(struct descriptor);
 		rxd_ctl->rx_head_idx++;
-		
+
 		//write back
+		/*
 		rx_desc->length = pktlen;
 		ret = dma_write(rx_nt,rxd_addr,rx_desc,sizeof(struct descriptor));
 		if(ret < 0){
 			debug("rx_desc write_back: failed to dma_write to %lx",rxd_addr);
 			continue;
 		}
+		info("dma_write back done");
+		*/
 
 		//generate rx interrupt
 		ret = dma_write(rx_nt,rx_irq->addr,&rx_irq->data,sizeof(rx_irq->data));
@@ -381,11 +387,18 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 			perror("dma_write for rx interrupt");
 		}
 
-		info("RX done. DMA write to %lx %d byte",rxd_ctl->rx_desc_head,pktlen);
-		*rx_state = RX_STATE_DONE;
+		info("RX done. DMA write at cpu %d to %lx %d byte",cpu,rxd_ctl->rx_desc_head,pktlen);
+
+		if(rxd_ctl->rx_head_idx < rxd_ctl->rx_tail_idx){
+			*rx_state = RX_STATE_READY;
+		}
+		else{
+			*rx_state = RX_STATE_DONE;
+		}
 	}
 	
-	info("end %d",q_number);
+	pthread_join(tap_rx_ctl->tid,NULL);
+
 	return NULL;
 }
 
@@ -458,7 +471,7 @@ int main(int argc,char **argv)
 	struct nettlp_mnic mnic;	
 	struct nettlp_msix msix[16];
 	cpu_set_t target_cpu_set;
-	pthread_t rx_tid[8]; //tap_read_thread
+	//pthread_t rx_tid[8]; //tap_read_thread
 
 	memset(&nt,0,sizeof(nt));
 
@@ -579,25 +592,19 @@ int main(int argc,char **argv)
 		tap_rx_ctl[i].rx_desc = mnic.rx_desc[i];
 		tap_rx_ctl[i].rxd_ctl = mnic.rx_desc_ctl + i;
 
-		if((ret = pthread_create(&rx_tid[i],NULL,nettlp_mnic_tap_read_thread,&tap_rx_ctl[i])) != 0){
+		if((ret = pthread_create(&tap_rx_ctl[i].tid,NULL,nettlp_mnic_tap_read_thread,&tap_rx_ctl[i])) != 0){
 			debug("%d thread failed to be created",i);
 		}
 
 		CPU_ZERO(&target_cpu_set);
 		CPU_SET(i,&target_cpu_set);
-		pthread_setaffinity_np(rx_tid[i],sizeof(cpu_set_t),&target_cpu_set);
+		pthread_setaffinity_np(tap_rx_ctl[i].tid,sizeof(cpu_set_t),&target_cpu_set);
 	}
 
 	info("start nettlp callback");
 	memset(&cb,0,sizeof(cb));
 	cb.mwr = nettlp_mnic_mwr;
 	nettlp_run_cb(nts_ptr,16,&cb,&mnic);
-
-	for(i=0;i<8;i++){
-		if((ret = pthread_join(rx_tid[i],NULL)) != 0){
-			debug("%d thread failed to be joined",i);
-		}
-	}
 
         return 0;
 }
