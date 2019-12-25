@@ -32,6 +32,7 @@
 #include <linux/prefetch.h>
 #include <linux/pm_runtime.h>
 #include <linux/overflow.h>
+#include <linux/delay.h>
 
 #include "nettlp_msg.h"
 #include <nettlp_mnic.h>
@@ -643,7 +644,6 @@ static void mnic_pull_tail(struct mnic_ring *rx_ring,struct descriptor *rx_desc,
 	
 	pr_info("%s: end \n",__func__);
 }
-
 static bool mnic_cleanup_headers(struct mnic_ring *rx_ring,struct descriptor *rx_desc,struct sk_buff *skb)
 {
 	pr_info("%s: start \n",__func__);
@@ -726,9 +726,11 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 	struct descriptor *rx_desc;
 	struct mnic_rx_buffer *rb;
 	uint16_t i = rx_ring->next_to_use;
+	int q_idx = rx_ring->queue_idx;
 
 	pr_info("%s: start \n",__func__);
-
+	pr_info("%s: queue index is %d \n",__func__,q_idx);
+	
 	if(!cleaned_count){
 		return;
 	}
@@ -742,8 +744,10 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 			break;
 		}
 
+		/* sync the buffer for use by the device*/
+		dma_sync_single_range_for_device(rx_ring->dev,rb->dma,rb->page_offset,MNIC_RX_BUFSZ,DMA_FROM_DEVICE);
+
 		rx_desc->addr = cpu_to_le64(rb->dma + rb->page_offset);
-		pr_info("%s: rb->dma is %#llx, rx_desc->addr is %#llx",__func__,rb->dma,rx_desc->addr);
 		
 		rx_desc++;
 		rb++;
@@ -755,7 +759,6 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 			i -= rx_ring->count;
 		}
 
-		//rx_desc->read.hdr_addr = 0;		
 		cleaned_count--;	
 	}while(cleaned_count);
 
@@ -766,9 +769,9 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 		rx_ring->next_to_alloc = i;
 		dma_wmb();
 		//notify rx tail
-		adapter->bar4->rx_desc_tail = i;
-		pr_info("rx descriptor tail is %d",i);
-		msleep(8000);
+		adapter->bar4->rx_desc_tail[q_idx] = i;
+		//msleep(8000);
+		pr_info("rx descriptor tail at %d queue is %d",i,q_idx);
 	}
 
 	pr_info("%s: end \n",__func__);
@@ -801,6 +804,21 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 #endif
 	return true;
 }*/
+
+static void mnic_reuse_rx_page(struct mnic_ring *rx_ring,struct mnic_rx_buffer *old_buff)
+{
+	struct mnic_rx_buffer *new_buff;
+	u16 nta = rx_ring->next_to_alloc;
+
+	new_buff = &rx_ring->rx_buf_info[nta];
+
+	nta++;
+	rx_ring->next_to_alloc = (nta < rx_ring->count) ? nta : 0;
+
+	memcpy(new_buff,old_buff,sizeof(struct mnic_rx_buffer));
+
+	dma_sync_single_range_for_device(rx_ring->dev,old_buff->dma,old_buff->page_offset,MNIC_RX_BUFSZ,DMA_FROM_DEVICE);
+}
 
 static bool mnic_can_reuse_rx_page(struct mnic_rx_buffer *rx_buffer)
 {
@@ -870,10 +888,13 @@ static struct sk_buff *mnic_fetch_rx_buffer(struct mnic_ring *rx_ring,struct des
 	if(likely(!skb)){
 		void *page_addr = page_address(page) + rx_buffer->page_offset;
 		prefetch(page_addr);
-
+#if L1_CACHE_BYTES < 128
+		prefetch(page_addr + L1_CACHE_BYTES);
+#endif	
 		//allocate a skbuff for rx on a specific device and and align ip
 		skb = netdev_alloc_skb_ip_align(rx_ring->ndev,MNIC_RX_HDR_LEN);
 		if(unlikely(!skb)){
+			rx_ring->rx_stats.alloc_failed++;
 			return NULL;
 		}
 		
@@ -885,10 +906,12 @@ static struct sk_buff *mnic_fetch_rx_buffer(struct mnic_ring *rx_ring,struct des
 	dma_sync_single_range_for_cpu(rx_ring->dev,rx_buffer->dma,rx_buffer->page_offset,MNIC_RX_BUFSZ,DMA_FROM_DEVICE);
 	
 	if(mnic_add_rx_frag(rx_ring,rx_buffer,rx_desc,skb)){
-		mnic_can_reuse_rx_page(/*rx_ring,page,*/rx_buffer);
+		pr_info("%s: reuse_rx_page \n",__func__);
+		mnic_reuse_rx_page(rx_ring,rx_buffer);
 	}
 	else{
 		dma_unmap_page(rx_ring->dev,rx_buffer->dma,PAGE_SIZE,DMA_FROM_DEVICE);
+		pr_info("%s: dma_unmap_page \n",__func__);
 	}
 
 	rx_buffer->page = NULL;
@@ -907,7 +930,7 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 
 	pr_info("%s: start \n",__func__);
 
-	while(likely(total_packets < budget)){
+	do{
 		struct descriptor *rx_desc;
 
 		if(cleaned_count >= MNIC_RX_BUFFER_WRITE){
@@ -915,10 +938,9 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 			cleaned_count = 0;			
 		}
 
+		rx_desc = MNIC_RX_DESC(rx_ring,rx_ring->next_to_clean);
 		dma_rmb();
 
-		rx_desc = MNIC_RX_DESC(rx_ring,rx_ring->next_to_clean);
-		
 		skb = mnic_fetch_rx_buffer(rx_ring,rx_desc,skb);
 		if(!skb){
 			break;
@@ -937,6 +959,7 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 		total_bytes += skb->len;
 		//mnic_process_skb_fields(rx_ring,rx_desc,skb);
 	
+		skb_record_rx_queue(skb,rx_ring->queue_idx);
 		skb->protocol = eth_type_trans(skb,rx_ring->ndev);
 		skb->ip_summed = CHECKSUM_NONE;
 
@@ -945,7 +968,7 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 		skb = NULL;
 		
 		total_packets++;
-	}
+	}while(likely(total_packets < budget));
 	
 	rx_ring->skb = skb;
 	rx_ring->rx_stats.packets += total_packets;
@@ -1201,8 +1224,10 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 	unsigned int data_len,size;
 	//uint32_t tx_flags = first->tx_flags;
 	uint16_t i = tx_ring->next_to_use;
+	int q_idx = tx_ring->queue_idx;
 	
 	pr_info("%s: start \n",__func__);
+	pr_info("%s: queue index is %d\n",__func__,q_idx);
 
 	tx_desc = MNIC_TX_DESC(tx_ring,i);
 	size = skb_headlen(skb);
@@ -1277,7 +1302,7 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 	
 	tx_ring->next_to_use = i;
 	//notify index
-	adapter->bar4->tx_desc_tail = i;
+	adapter->bar4->tx_desc_tail[q_idx] = i;
 	
 	mnic_maybe_stop_tx(tx_ring,DESC_NEEDED);
 
@@ -1750,7 +1775,7 @@ static int mnic_alloc_q_vectors(struct mnic_adapter *adapter)
 		txr_remaining -= tqpv;
 		rxr_idx++;	
 		txr_idx++;
-		pr_info("%s: allocate q_vector for rx at %d \n",__func__,rxr_idx);
+		pr_info("%s: allocate q_vector for tx at %d \n",__func__,txr_idx);
 	}
 
 	/*for(;txr_remaining;v_idx++){

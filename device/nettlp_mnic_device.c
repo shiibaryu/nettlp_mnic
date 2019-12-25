@@ -77,7 +77,7 @@ struct nettlp_mnic{
 	int rx_queue_id;
 	uintptr_t *rx_desc_base;
 
-	struct nettlp *rx_nt; 
+	struct nettlp rx_nt; 
 	struct nettlp_msix *tx_irq,*rx_irq;
 
 	struct descriptor *tx_desc[TX_QUEUES];
@@ -98,7 +98,6 @@ struct nettlp_mnic{
 	uintptr_t *rx_desc_addr;
 #define _GNU_SOURCE
 };
-
 
 int tap_alloc(char *dev)
 {
@@ -267,7 +266,8 @@ void mnic_rx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 	info("rx_head index is %d",rxd_ctl->rx_head_idx);
 	info("rx_tail index is %d",rxd_ctl->rx_tail_idx);
 
-	mnic->rx_nt = nt;
+	mnic->rx_nt = *nt;
+	info("rx_nt requester %d",mnic->rx_nt.requester);
 	mnic->rx_state[offset] = RX_STATE_READY;
 }
 
@@ -297,7 +297,9 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mh,void *m,size_t count
 		struct tx_desc_ctl *txd_ctl = mnic->tx_desc_ctl + mnic->tx_queue_id;
 		memcpy(txd_base,m,8);
 		txd_ctl->tx_desc_head = *txd_base;
-		info("Queue %d: TX desc base is %lx",mnic->tx_queue_id,*txd_base);
+		txd_ctl->tx_desc_tail = *txd_base;
+		//info("Queue %d: TX desc base is %#lx",mnic->tx_queue_id,*txd_base);
+		//info("head %#lx, tail %#lx",txd_ctl->tx_desc_head,txd_ctl->tx_desc_tail);
 		mnic->tx_queue_id++;
 	}
 	else if(is_mwr_addr_rx_desc_ptr(mnic->bar4_start,dma_addr)){
@@ -306,12 +308,14 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mh,void *m,size_t count
 		memcpy(rxd_base,m,8);
 		rxd_ctl->rx_desc_head = *rxd_base;
 		rxd_ctl->rx_desc_tail = *rxd_base;
-		info("Queue %d: RX desc base is %lx",mnic->rx_queue_id,*rxd_base);
+		//info("Queue %d: RX desc base is %lx",mnic->rx_queue_id,*rxd_base);
+		//info("head %#lx, tail %#lx",rxd_ctl->rx_desc_head,rxd_ctl->rx_desc_tail);
 		mnic->rx_queue_id++;
 	}
 	else{
 		offset = get_bar4_offset(mnic->bar4_start,dma_addr);
 		memcpy(&idx,m,sizeof(idx));
+		info("offset is %d",offset);
 		if(offset < 8){
 			mnic_tx(idx,nt,mnic,offset);
 			return 0;
@@ -319,9 +323,9 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mh,void *m,size_t count
 			mnic_rx(idx,nt,mnic,offset - 8);
 			return 0;
 		}
-		
 	}
 
+	info("txq_id is %d, rxq_id is %d",mnic->tx_queue_id,mnic->rx_queue_id);
 	return 0;
 }
 
@@ -354,13 +358,13 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 		if(ret == 0 || !(x[0].revents & POLLIN)){
 			continue;
 		}
-
+		/*
 		if(rxd_ctl->rx_tail_idx == 0 && rxd_ctl->rx_head_idx == 0){
 			debug("rx_desc is not prepared yet");
-			break;
-		}
+			continue;
+		}*/
 		
-		pktlen = read(tap_fd,buf,sizeof(*buf));
+		pktlen = read(tap_fd,buf,sizeof(buf));
 		if(pktlen < 0){
 			perror("read");
 			continue;
@@ -373,6 +377,8 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 		*rx_state = RX_STATE_BUSY;
 		rxd_addr = rxd_ctl->rx_desc_head;
 		
+		info("rxd_addr is %#lx",rxd_addr);
+
 		//ret = dma_write(rx_nt,rxd_ctl->rx_desc_head,buf,pktlen);
 		ret = dma_write(rx_nt,rx_desc->addr,buf,pktlen);
 		if(ret < 0){
@@ -382,15 +388,18 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 
 		rxd_ctl->rx_desc_head += sizeof(struct descriptor);
 		rxd_ctl->rx_head_idx++;
-
+		
 		//write back
 		rx_desc->length = pktlen;
+		info("1: rxd_addr is %#lx",rxd_addr);
+		info("rx_desc_head is %#lx",rxd_ctl->rx_desc_head);
 		ret = dma_write(rx_nt,rxd_addr,rx_desc,sizeof(struct descriptor));
 		if(ret < 0){
-			debug("rx_desc write_back: failed to dma_write to %lx",rxd_addr);
+			debug("rx_desc write_back: failed to dma_write to %#lx",rxd_addr);
 			continue;
 		}
 		info("dma_write back done");
+		info("1: rxd_addr is %#lx",rxd_addr);
 
 		//generate rx interrupt
 		ret = dma_write(rx_nt,rx_irq->addr,&rx_irq->data,sizeof(rx_irq->data));
@@ -398,9 +407,9 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 			fprintf(stderr,"failed to generate Rx Interrupt\n");
 			perror("dma_write for rx interrupt");
 		}
-
+		
 		info("RX done. DMA write at cpu %d to %lx %d byte",cpu,rxd_ctl->rx_desc_head,pktlen);
-
+		
 		if(rxd_ctl->rx_head_idx < rxd_ctl->rx_tail_idx){
 			*rx_state = RX_STATE_READY;
 		}
@@ -539,7 +548,7 @@ int main(int argc,char **argv)
 	mnic_alloc(&mnic);
 
 	for(n=0;n<8;n++){
-		mnic.rx_state[n] = 0;
+		mnic.rx_state[n] = RX_STATE_INIT;
 	}
 
 	struct nettlp_msix *tx_irq = mnic.tx_irq;
@@ -574,8 +583,8 @@ int main(int argc,char **argv)
 		info("msix addr at %d is %#lx",i,msix[i].addr);
 	}
 	for(i=0;i<8;i++){
-		*tx_irq = msix[i];
-		*rx_irq = msix[i+8];
+		*tx_irq = msix[i*8];
+		*rx_irq = msix[i];
 		tx_irq++;
 		rx_irq++;
 	}
@@ -598,8 +607,10 @@ int main(int argc,char **argv)
 		return -1;
 	}
 
+
 	for(i=0;i<8;i++){
 		tap_rx_ctl[i].tap_fd = mnic.tap_fd;
+		tap_rx_ctl[i].rx_nt = &mnic.rx_nt;
 		tap_rx_ctl[i].rx_state = &mnic.rx_state[i];
 		tap_rx_ctl[i].rx_irq = mnic.rx_irq + i;
 		tap_rx_ctl[i].rx_desc = mnic.rx_desc[i];
