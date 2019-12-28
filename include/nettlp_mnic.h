@@ -1,7 +1,7 @@
 /*TX/RX descriptor defines*/
 #define MNIC_DEFAULT_TXD	256
 #define MNIC_MIN_TXD		80
-#define MNIC_DEFAULT_TX_WORK    128
+#define MNIC_DEFAULT_TX_WORK  128
 #define MNIC_MAX_TXD		4096
 #define MNIC_MAX_TXD_PWR	15
 #define MNIC_MAX_DATA_PER_TXD   (1u << MNIC_MAX_TXD_PWR)
@@ -125,8 +125,8 @@ struct mnic_bar4
 	uint64_t tx_desc_base[8];
 	uint64_t rx_desc_base[8];
 	
-	uint64_t tx_desc_tail;
-	uint64_t rx_desc_tail;
+	uint64_t tx_desc_tail[8];
+	uint64_t rx_desc_tail[8];
 
 	//uint32_t enabled;
 }__attribute__((packed));
@@ -277,6 +277,7 @@ struct mnic_q_vector{
 	struct mnic_adapter *adapter;
 	int cpu;
 	uint32_t eims_value;
+	uint8_t total_packets;
 
 	uint16_t itr_val;
 	uint8_t set_itr;
@@ -329,9 +330,7 @@ struct mnic_adapter{
 	uint16_t tx_ring_count;
 	uint16_t rx_ring_count;
 
-	spinlock_t tx_lock;
-	spinlock_t rx_lock;
-	spinlock_t stats64_lock;
+	spinlock_t lock;
 
 	struct tasklet_struct *rx_tasklet;
 	struct napi_struct napi;

@@ -25,7 +25,7 @@
 #define TX_QUEUES   	8
 #define RX_QUEUES   	8
 
-#define DESC_ENTRY_SIZE	256	
+#define DESC_ENTRY_SIZE 256	
 
 #define BAR4_TX_DESC_OFFSET 	56	
 #define BAR4_RX_DESC_OFFSET	120
@@ -190,7 +190,7 @@ void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 		buf++;
 		tx_desc++;
 
-		if(txd_ctl->tx_tail_idx >= DESC_ENTRY_SIZE){
+		if(txd_ctl->tx_tail_idx >= DESC_ENTRY_SIZE - 1){
 			txd_ctl->tx_tail_idx = 0;
 			txd_ctl->tx_desc_tail = *tx_desc_base;
 		}
@@ -212,7 +212,7 @@ void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 		tx_desc++;
 		txd_ctl->tx_head_idx++;
 
-		if(txd_ctl->tx_head_idx >= DESC_ENTRY_SIZE){
+		if(txd_ctl->tx_head_idx > DESC_ENTRY_SIZE){
 			txd_ctl->tx_head_idx = 0;
 		}
 	}
@@ -251,23 +251,23 @@ void mnic_rx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 			fprintf(stderr,"failed to read rx desc from %#lx\n",rxd_ctl->rx_desc_tail);
 			return;
 		}
-		info("dma_read addr at queue %d & cpu %d is %#lx",offset,cpu,rx_desc->addr);
+		//info("dma_read addr at queue %d & cpu %d is %#lx",offset,cpu,rx_desc->addr);
 		
 		rx_desc++;
 		rxd_ctl->rx_tail_idx++;
 		rxd_ctl->rx_desc_tail += sizeof(struct descriptor);
 	
-		if(rxd_ctl->rx_tail_idx >= DESC_ENTRY_SIZE){	
+		if(rxd_ctl->rx_tail_idx > DESC_ENTRY_SIZE - 1){	
+			info("yes");
 			rxd_ctl->rx_tail_idx = 0;
 			rxd_ctl->rx_desc_tail = *rx_desc_base;
 		}
 	}
 	
-	info("rx_head index is %d",rxd_ctl->rx_head_idx);
-	info("rx_tail index is %d",rxd_ctl->rx_tail_idx);
+	//info("rx_head index is %d",rxd_ctl->rx_head_idx);
+	//info("rx_tail index is %d",rxd_ctl->rx_tail_idx);
 
 	mnic->rx_nt = *nt;
-	info("rx_nt requester %d",mnic->rx_nt.requester);
 	mnic->rx_state[offset] = RX_STATE_READY;
 }
 
@@ -275,7 +275,7 @@ static inline unsigned int get_bar4_offset(uintptr_t start,uintptr_t received)
 {
 	unsigned int offset;
 	
-	info("start %#lx, received %#lx",start,received);
+	//info("start %#lx, received %#lx",start,received);
 
 	offset = (received - start - BASE_SUM)/8;
 	
@@ -290,7 +290,7 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mh,void *m,size_t count
 	uintptr_t dma_addr;
 
 	dma_addr = tlp_mr_addr(mh);
-	info("dma_addr is %#lx",dma_addr);
+	//info("dma_addr is %#lx",dma_addr);
 	
 	if(is_mwr_addr_tx_desc_ptr(mnic->bar4_start,dma_addr)){
 		uintptr_t *txd_base = mnic->tx_desc_base + mnic->tx_queue_id;
@@ -298,7 +298,7 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mh,void *m,size_t count
 		memcpy(txd_base,m,8);
 		txd_ctl->tx_desc_head = *txd_base;
 		txd_ctl->tx_desc_tail = *txd_base;
-		//info("Queue %d: TX desc base is %#lx",mnic->tx_queue_id,*txd_base);
+		info("Queue %d: TX desc base is %#lx",mnic->tx_queue_id,*txd_base);
 		//info("head %#lx, tail %#lx",txd_ctl->tx_desc_head,txd_ctl->tx_desc_tail);
 		mnic->tx_queue_id++;
 	}
@@ -308,24 +308,25 @@ int nettlp_mnic_mwr(struct nettlp *nt,struct tlp_mr_hdr *mh,void *m,size_t count
 		memcpy(rxd_base,m,8);
 		rxd_ctl->rx_desc_head = *rxd_base;
 		rxd_ctl->rx_desc_tail = *rxd_base;
-		//info("Queue %d: RX desc base is %lx",mnic->rx_queue_id,*rxd_base);
+		info("Queue %d: RX desc base is %lx",mnic->rx_queue_id,*rxd_base);
 		//info("head %#lx, tail %#lx",rxd_ctl->rx_desc_head,rxd_ctl->rx_desc_tail);
 		mnic->rx_queue_id++;
 	}
 	else{
 		offset = get_bar4_offset(mnic->bar4_start,dma_addr);
 		memcpy(&idx,m,sizeof(idx));
-		info("offset is %d",offset);
+		//info("offset is %d",offset);
 		if(offset < 8){
+			info("go to tx");
 			mnic_tx(idx,nt,mnic,offset);
 			return 0;
 		}else if(offset >= 8){
+			//info("go to rx");
 			mnic_rx(idx,nt,mnic,offset - 8);
 			return 0;
 		}
 	}
 
-	info("txq_id is %d, rxq_id is %d",mnic->tx_queue_id,mnic->rx_queue_id);
 	return 0;
 }
 
@@ -351,11 +352,8 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 		}
 		
 		ret = poll(x,1,500);
-		if(ret < 0){
-			break;
-		}	
 
-		if(ret == 0 || !(x[0].revents & POLLIN)){
+		if(ret < 0 || ret == 0 || !(x[0].revents & POLLIN)){
 			continue;
 		}
 		/*
@@ -377,8 +375,6 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 		*rx_state = RX_STATE_BUSY;
 		rxd_addr = rxd_ctl->rx_desc_head;
 		
-		info("rxd_addr is %#lx",rxd_addr);
-
 		//ret = dma_write(rx_nt,rxd_ctl->rx_desc_head,buf,pktlen);
 		ret = dma_write(rx_nt,rx_desc->addr,buf,pktlen);
 		if(ret < 0){
@@ -391,15 +387,12 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 		
 		//write back
 		rx_desc->length = pktlen;
-		info("1: rxd_addr is %#lx",rxd_addr);
-		info("rx_desc_head is %#lx",rxd_ctl->rx_desc_head);
 		ret = dma_write(rx_nt,rxd_addr,rx_desc,sizeof(struct descriptor));
 		if(ret < 0){
 			debug("rx_desc write_back: failed to dma_write to %#lx",rxd_addr);
 			continue;
 		}
 		info("dma_write back done");
-		info("1: rxd_addr is %#lx",rxd_addr);
 
 		//generate rx interrupt
 		ret = dma_write(rx_nt,rx_irq->addr,&rx_irq->data,sizeof(rx_irq->data));
@@ -408,7 +401,8 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 			perror("dma_write for rx interrupt");
 		}
 		
-		info("RX done. DMA write at cpu %d to %lx %d byte",cpu,rxd_ctl->rx_desc_head,pktlen);
+		info("RX done. DMA write at cpu %d to %lx %d byte, Data is %s",cpu,rxd_ctl->rx_desc_head,pktlen,buf);
+		info("rx_irq addr is %#lx, data is %08x",rx_irq->addr,rx_irq->data);
 		
 		if(rxd_ctl->rx_head_idx < rxd_ctl->rx_tail_idx){
 			*rx_state = RX_STATE_READY;
@@ -583,8 +577,10 @@ int main(int argc,char **argv)
 		info("msix addr at %d is %#lx",i,msix[i].addr);
 	}
 	for(i=0;i<8;i++){
-		*tx_irq = msix[i*8];
+		*tx_irq = msix[i+8];
 		*rx_irq = msix[i];
+		info("TX IRQ address is %#lx,data is 0x%08x",tx_irq->addr,tx_irq->data);
+		info("RX IRQ address is %#lx,data is 0x%08x",rx_irq->addr,rx_irq->data);
 		tx_irq++;
 		rx_irq++;
 	}
@@ -596,8 +592,8 @@ int main(int argc,char **argv)
 	rx_irq = mnic.rx_irq;
 
 	for(i=0;i<8;i++){
-		info("TX IRQ address is %#lx,data is 0x%08x",tx_irq->addr,tx_irq->data);
-		info("RX IRQ address is %#lx,data is 0x%08x",rx_irq->addr,rx_irq->data);
+		//info("TX IRQ address is %#lx,data is 0x%08x",tx_irq->addr,tx_irq->data);
+		//info("RX IRQ address is %#lx,data is 0x%08x",rx_irq->addr,rx_irq->data);
 		tx_irq++;
 		rx_irq++;
 	}

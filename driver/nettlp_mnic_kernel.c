@@ -607,11 +607,15 @@ static bool mnic_is_non_eop(struct mnic_ring *rx_ring,struct descriptor *rx_desc
 	rx_ring->next_to_clean = ntc;
 	
 	prefetch(MNIC_RX_DESC(rx_ring,ntc));
-	
+
+	/*	
 	if(likely(mnic_test_staterr(rx_desc,MNIC_RXD_STAT_EOP))){
+		pr_info("%s: end of packets \n",__func__);
+		pr_info("%s: end \n",__func__);
 		return false;
-	}
+	}*/
 	
+	pr_info("%s: end of packets \n",__func__);
 	pr_info("%s: end \n",__func__);
 
 	return true;
@@ -665,6 +669,7 @@ static bool mnic_cleanup_headers(struct mnic_ring *rx_ring,struct descriptor *rx
 		int pad_len = 60 - skb->len;	
 		
 		if(skb_pad(skb,pad_len)){
+			pr_info("%s:skb_pad \n",__func__);
 			return true;
 		}
 		__skb_put(skb,pad_len);
@@ -745,7 +750,7 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 		}
 
 		/* sync the buffer for use by the device*/
-		dma_sync_single_range_for_device(rx_ring->dev,rb->dma,rb->page_offset,MNIC_RX_BUFSZ,DMA_FROM_DEVICE);
+	//	dma_sync_single_range_for_device(rx_ring->dev,rb->dma,rb->page_offset,MNIC_RX_BUFSZ,DMA_FROM_DEVICE);
 
 		rx_desc->addr = cpu_to_le64(rb->dma + rb->page_offset);
 		
@@ -770,7 +775,6 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 		dma_wmb();
 		//notify rx tail
 		adapter->bar4->rx_desc_tail[q_idx] = i;
-		//msleep(8000);
 		pr_info("rx descriptor tail at %d queue is %d",i,q_idx);
 	}
 
@@ -826,9 +830,9 @@ static bool mnic_can_reuse_rx_page(struct mnic_rx_buffer *rx_buffer)
 	struct page *page = rx_buffer->page;
 	
 	pr_info("%s: start \n",__func__);
-	/*if(unlikely(igb_page_is_reserved(page))return false;*/
+	//if(unlikely(igb_page_is_reserved(page))return false;
 	
-	/*page size < 8192*/
+	//page size < 8192
 	if(unlikely((page_ref_count(page)-pagecnt_bias)<1)){
 		return false;
 	}
@@ -841,11 +845,35 @@ static bool mnic_can_reuse_rx_page(struct mnic_rx_buffer *rx_buffer)
 	pr_info("%s: end \n",__func__);
 	return true;
 }
+/*
+static bool mnic_can_reuse_rx_page(struct mnic_rx_buffer *rx_buffer,struct page *page,unsigned int truesize)
+{
+	if(unlikely(page_to_nid(page) != numa_node_id())){
+			return false;
+	}
 
+#if (PAGE_SIZE < 8192)
+	if(unlikely(page_count(page) != 1)){
+		return false;
+	}
+	rx_buffer->page_offset ^= MNIC_RX_BUFSZ;
+	atomic_set(&page->_count,2);
+#else
+	rx_buffer->page_offset += truesize;
+
+	if(rx_buffer->page_offset > (PAGE_SIZE - MNIC_RX_BUFSZ)){
+			return false;
+	}
+
+	get_page(page);
+#endif
+		return true;
+}
+*/
 static bool mnic_add_rx_frag(struct mnic_ring *mnic_ring,struct mnic_rx_buffer *rx_buffer,struct descriptor *rx_desc,struct sk_buff *skb)
 {
 	struct page *page = rx_buffer->page;
-	uint32_t size = 2048;
+	uint32_t size = rx_desc->length;
 #if (PAGE_SIZE < 8192)
 	unsigned int truesize = MNIC_RX_BUFSZ;
 #else
@@ -855,21 +883,26 @@ static bool mnic_add_rx_frag(struct mnic_ring *mnic_ring,struct mnic_rx_buffer *
 	pr_info("%s: start \n",__func__);
 
 	if((size <= MNIC_RX_HDR_LEN) && !skb_is_nonlinear(skb)){
+		
 		unsigned char *vaddr = page_address(page) + rx_buffer->page_offset;
+		pr_info("%s: before vaddr \n",__func__);
 
 		memcpy(__skb_put(skb,size),vaddr,ALIGN(size,sizeof(long)));
 
 		if(likely(page_to_nid(page) == numa_node_id())){
+			pr_info("%s: return true \n",__func__);
 			return true;
 		}
 	
 		put_page(page);
+		pr_info("%s: return false with put_page \n",__func__);
 		return false;
 	}
 
 	//for fragmentation
 	skb_add_rx_frag(skb,skb_shinfo(skb)->nr_frags,page,rx_buffer->page_offset,size,truesize);
 
+	pr_info("%s: mnic_can_reuse_rx_page \n",__func__);
 	pr_info("%s: end \n",__func__);
 
 	return mnic_can_reuse_rx_page(rx_buffer/*,page,truesize*/);  
@@ -888,11 +921,12 @@ static struct sk_buff *mnic_fetch_rx_buffer(struct mnic_ring *rx_ring,struct des
 	if(likely(!skb)){
 		void *page_addr = page_address(page) + rx_buffer->page_offset;
 		prefetch(page_addr);
+
 #if L1_CACHE_BYTES < 128
 		prefetch(page_addr + L1_CACHE_BYTES);
 #endif	
 		//allocate a skbuff for rx on a specific device and and align ip
-		skb = netdev_alloc_skb_ip_align(rx_ring->ndev,MNIC_RX_HDR_LEN);
+		skb = netdev_alloc_skb_ip_align(rx_ring->ndev,rx_desc->length + NET_IP_ALIGN);
 		if(unlikely(!skb)){
 			rx_ring->rx_stats.alloc_failed++;
 			return NULL;
@@ -921,6 +955,7 @@ static struct sk_buff *mnic_fetch_rx_buffer(struct mnic_ring *rx_ring,struct des
 	return skb;
 }
 
+/*
 static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 {
 	struct mnic_ring *rx_ring = q_vector->rx.ring;
@@ -932,7 +967,7 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 
 	do{
 		struct descriptor *rx_desc;
-
+		
 		if(cleaned_count >= MNIC_RX_BUFFER_WRITE){
 			mnic_alloc_rx_buffers(rx_ring,cleaned_count,q_vector->adapter);
 			cleaned_count = 0;			
@@ -945,19 +980,23 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 		if(!skb){
 			break;
 		}
-		
+	
+		pr_info("%s:skb data len is %d \n",__func__,skb->data_len);	
+		pr_info("%s:skb data is %s \n",__func__,skb->data);	
+
 		cleaned_count++;
 		
-		if(mnic_is_non_eop(rx_ring,rx_desc)){
+		if(!mnic_is_non_eop(rx_ring,rx_desc)){
 			continue;
 		}
+
 		if(mnic_cleanup_headers(rx_ring,rx_desc,skb)){
 			skb = NULL;
 			continue;
 		}
 		
 		total_bytes += skb->len;
-		//mnic_process_skb_fields(rx_ring,rx_desc,skb);
+		pr_info("%s: skb len is %d",__func__,skb->len);
 	
 		skb_record_rx_queue(skb,rx_ring->queue_idx);
 		skb->protocol = eth_type_trans(skb,rx_ring->ndev);
@@ -966,7 +1005,7 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 		napi_gro_receive(&q_vector->napi,skb);
 
 		skb = NULL;
-		
+		pr_info("%s: total packet is %d \n",__func__,total_packets);	
 		total_packets++;
 	}while(likely(total_packets < budget));
 	
@@ -985,6 +1024,62 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 
 	return (total_packets < budget);
 }	
+*/
+
+static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
+{
+	struct mnic_ring *rx_ring = q_vector->rx.ring;
+	struct sk_buff *skb = rx_ring->skb;
+	uint32_t total_bytes = 0, total_packets = 0;
+	uint32_t cleaned_count = mnic_desc_unused(rx_ring);
+
+	pr_info("%s: cleaned count is %d",__func__,cleaned_count);
+	pr_info("%s: budget is %d",__func__,budget);
+
+	do{
+		struct descriptor *rx_desc;
+
+		rx_desc = MNIC_RX_DESC(rx_ring,rx_ring->next_to_clean);
+		dma_rmb();
+		
+		skb = mnic_fetch_rx_buffer(rx_ring,rx_desc,skb);
+		if(!skb){
+			pr_err("%s: failed to fetch rx buffer\n",__func__);
+			break;
+		}
+
+		cleaned_count++;
+	
+		mnic_is_non_eop(rx_ring,rx_desc);
+		total_bytes += skb->len;
+		skb_record_rx_queue(skb,rx_ring->queue_idx);
+		skb->protocol = eth_type_trans(skb,rx_ring->ndev);
+		skb->ip_summed = CHECKSUM_NONE;
+		napi_gro_receive(&q_vector->napi,skb);
+
+		skb = NULL;
+		total_packets++;
+		pr_info("%s: total packet is %d\n",__func__,total_packets);
+	}while(likely(total_packets < budget));
+
+	rx_ring->skb = skb;
+
+	rx_ring->rx_stats.packets += total_packets;
+	rx_ring->rx_stats.bytes += total_bytes;
+	
+	q_vector->rx.total_packets += total_packets;
+	q_vector->rx.total_bytes += total_bytes;
+
+	/*
+	if(cleaned_count > 150){
+		mnic_alloc_rx_buffers(rx_ring,cleaned_count,q_vector->adapter);
+	}*/
+
+	pr_info("%s: end \n",__func__);
+
+	return true;
+	//return (total_packets < budget);
+}
 
 static int mnic_poll(struct napi_struct *napi,int budget)
 {
@@ -992,28 +1087,39 @@ static int mnic_poll(struct napi_struct *napi,int budget)
 	int work_done = 0;
 	struct mnic_q_vector *q_vector = container_of(napi,struct mnic_q_vector,napi);
 
-	pr_info("%s: start \n",__func__);
+	/*
+	if(q_vector->rx.ring){
+		struct mnic_ring *rx_ring = q_vector->rx.ring;
+		struct descriptor *rx_desc = MNIC_RX_DESC(rx_ring,rx_ring->next_to_clean);
+		pr_info("%s: pkt length is %lld\n",__func__,rx_desc->length);
+	}
 
+	napi_complete(napi);
 
-#ifdef CONFIG_MNIC_DCA
-	mnic_update_dca(q_vector);
-#endif
+	pr_info("%s: end \n",__func__);
+	return 0;
+	*/
 
 	if(q_vector->tx.ring){
 		clean_complete = mnic_clean_tx_irq(q_vector);
 	}
 	if(q_vector->rx.ring){
-		int cleaned = mnic_clean_rx_irq(q_vector,budget);
-		work_done += cleaned;
-		if(cleaned >= budget){
-			clean_complete = false;
-		}
+		clean_complete = mnic_clean_rx_irq(q_vector,budget);
+	// 	work_done += cleaned;
+	//	if(cleaned >= budget){
+	//		clean_complete = false;
+	//	}
 	}
 
-	if(!clean_complete){
+	if(clean_complete == false){
 		return budget;
 	}
 	
+	napi_complete(napi);
+
+	pr_info("%s: end \n",__func__);
+	return 0;
+	/*	
 	if(likely(napi_complete_done(napi,work_done))){
 		//rmnic_ring_irq_enable(q_vector);
 		pr_info("%s:napi complete done",__func__);
@@ -1022,6 +1128,7 @@ static int mnic_poll(struct napi_struct *napi,int budget)
 	pr_info("%s: end \n",__func__);
 
 	return min(work_done,budget-1);
+	*/
 }
 
 static void mnic_free_irq(struct mnic_adapter *adapter)
@@ -1052,6 +1159,7 @@ static void mnic_free_all_rx_resources(struct mnic_adapter *adapter)
 	}
 	pr_info("%s: end \n",__func__);
 }
+
 static int __mnic_open(struct net_device *ndev,bool resuming)
 {
 	int ret,i;
@@ -1065,8 +1173,6 @@ static int __mnic_open(struct net_device *ndev,bool resuming)
 		pm_runtime_get_sync(&pdev->dev);
 	}*/
 
-	netif_carrier_off(ndev);
-	
 	/* allocate transmit descriptors*/
 	ret = mnic_setup_all_tx_resources(adapter);
 	if(ret){
@@ -1478,7 +1584,7 @@ static inline struct mnic_ring *mnic_tx_queue_mapping(struct mnic_adapter *adapt
 	return adapter->tx_ring[r_idx];
 }
 
-static netdev_tx_t nettlp_mnic_xmit_frame(struct sk_buff *skb,struct net_device *netdev)
+static netdev_tx_t mnic_xmit_frame(struct sk_buff *skb,struct net_device *netdev)
 {
 	struct mnic_adapter *adapter = netdev_priv(netdev);
 	
@@ -1516,7 +1622,7 @@ static const struct net_device_ops nettlp_mnic_ops = {
 	.ndo_uninit		= nettlp_mnic_uninit,
 	.ndo_open		= mnic_open, 
 	.ndo_stop		= mnic_close,
-	.ndo_start_xmit 	= nettlp_mnic_xmit_frame,
+	.ndo_start_xmit 	= mnic_xmit_frame,
 	.ndo_get_stats64  	= ip_tunnel_get_stats64,
 	.ndo_change_mtu 	= eth_change_mtu,
 	.ndo_validate_addr 	= eth_validate_addr,
@@ -1854,7 +1960,6 @@ static int mnic_sw_init(struct mnic_adapter *adapter)
 	adapter->max_frame_size = ndev->mtu + ETH_HLEN + ETH_FCS_LEN + VLAN_HLEN;
 	adapter->min_frame_size  = ETH_ZLEN + ETH_FCS_LEN;
 
-	spin_lock_init(&adapter->stats64_lock);
 
 	max_rss_queues = MNIC_MAX_RX_QUEUES;
 	adapter->rss_queues = min_t(uint32_t,max_rss_queues,num_online_cpus());
@@ -1977,7 +2082,7 @@ static int mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 
 	//access network device private data
 	//like getting a pointer of net_device
-	adapter = (struct mnic_adapter *)netdev_priv(ndev);
+	adapter = netdev_priv(ndev);
 	adapter->ndev = ndev;
 	adapter->pdev = pdev;
 	adapter->msg_enable = netif_msg_init(debug,DEFAULT_MSG_ENABLE);
@@ -1997,13 +2102,15 @@ static int mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 	ndev->netdev_ops = &nettlp_mnic_ops;
 	ndev->min_mtu = ETH_MIN_MTU;
 	ndev->max_mtu = ETH_MAX_MTU;
-	
+	ndev->features = NETIF_F_LLTX;
+
 	//initialize the private structure
 	ret = mnic_sw_init(adapter);
 	if(ret){
 		goto err9;		
 	}
 
+	strcpy(ndev->name,"momosiro");
 	ret = register_netdev(ndev);
 	if(ret){
 		goto err10;
@@ -2011,6 +2118,7 @@ static int mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 
 	/*------------------------------------------------------*/
 
+	
 	/*request irq for nettlp_msg_init*/
 	ret = mnic_request_irq(adapter);
 	if(ret){
