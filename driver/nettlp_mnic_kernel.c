@@ -46,9 +46,6 @@
 
 static int debug = -1;
 
-#define TX_CLEAN_BATCH 64
-#define BATCH_SIZE 68
-
 static int nettlp_mnic_init(struct net_device *ndev)
 {
 	pr_info("%s: start",__func__);
@@ -351,9 +348,11 @@ int mnic_setup_rx_resource(struct mnic_ring *rx_ring,int i,struct mnic_adapter *
 
 	/* Round up to nearest 4K */
 	rx_ring->size = rx_ring->count * sizeof(struct descriptor);
-	rx_ring->size = ALIGN(rx_ring->size, 4096);
+	//rx_ring->size = ALIGN(rx_ring->size, 2048);
 	rx_ring->desc = dma_alloc_coherent(dev, rx_ring->size,
 					   &rx_ring->dma, GFP_KERNEL);
+	//dma_map_single(dev,rx_ring->desc,sizeof(rx_ring->desc),DMA_BIDIRECTIONAL);
+	rx_ring->rx_buf = dma_alloc_coherent(rx_ring->dev,2048*rx_ring->count,&rx_ring->rx_dma,GFP_KERNEL);
 
 	pr_info("For descriptor-> size: %lld ring_count: %d",rx_ring->size,rx_ring->count);
 	if (!rx_ring->desc){
@@ -365,6 +364,7 @@ int mnic_setup_rx_resource(struct mnic_ring *rx_ring,int i,struct mnic_adapter *
 	//notify rx_desc_base
 	adapter->bar4->rx_desc_base[i] = rx_ring->dma;
 	pr_info("rx desc base %d is %llx",i,rx_ring->dma);
+	msleep(1000);
 
 	rx_ring->next_to_alloc = 0;
 	rx_ring->next_to_clean = 0;
@@ -692,6 +692,7 @@ static bool mnic_alloc_mapped_page(struct mnic_ring *rx_ring,struct mnic_rx_buff
 {
 	struct page *page = rb->page;
 	dma_addr_t dma;
+	dma_addr_t rx_dma;
 	
 	pr_info("%s: start \n",__func__);
 
@@ -709,6 +710,10 @@ static bool mnic_alloc_mapped_page(struct mnic_ring *rx_ring,struct mnic_rx_buff
 	}
 	
 	dma = dma_map_page_attrs(rx_ring->dev,page,0,2048,DMA_FROM_DEVICE,MNIC_RX_DMA_ATTR);
+	//bufferをここでdma_alloc_coherent
+	//そこのphyaddrをrb->dmaに入れる
+	//返り血はskb_copy_to_liner_data_offsetに入れる
+	//rx_ring->rx_buf = dma_alloc_coherent(rx_ring->dev,2048,rx_ring->rx_dma,GFP_KERNEL);
 
 	if(dma_mapping_error(rx_ring->dev,dma)){
 		__free_page(page);
@@ -750,9 +755,13 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 		}
 
 		/* sync the buffer for use by the device*/
-	//	dma_sync_single_range_for_device(rx_ring->dev,rb->dma,rb->page_offset,MNIC_RX_BUFSZ,DMA_FROM_DEVICE);
+		dma_sync_single_range_for_device(rx_ring->dev,rb->dma,rb->page_offset,MNIC_RX_BUFSZ,DMA_FROM_DEVICE);
 
-		rx_desc->addr = cpu_to_le64(rb->dma + rb->page_offset);
+		//rx_desc->addr = cpu_to_le64(rb->dma + rb->page_offset);
+		rx_desc->addr = rx_ring->rx_dma;
+		rx_desc->length = 2048;
+		dma_map_single(rx_ring->dev,rx_ring->rx_buf,2048,DMA_FROM_DEVICE);
+		dma_map_single(rx_ring->dev,rx_desc,sizeof(rx_desc),DMA_BIDIRECTIONAL);
 		
 		rx_desc++;
 		rb++;
@@ -884,10 +893,12 @@ static bool mnic_add_rx_frag(struct mnic_ring *mnic_ring,struct mnic_rx_buffer *
 
 	if((size <= MNIC_RX_HDR_LEN) && !skb_is_nonlinear(skb)){
 		
-		unsigned char *vaddr = page_address(page) + rx_buffer->page_offset;
+		//unsigned char *vaddr = page_address(page) + rx_buffer->page_offset;
+		unsigned char *vaddr = page_address(page);
 		pr_info("%s: before vaddr \n",__func__);
 
-		memcpy(__skb_put(skb,size),vaddr,ALIGN(size,sizeof(long)));
+		pr_info("%s: vaddr is %s, size is %d",__func__,vaddr,size);
+		memcpy(__skb_put(skb,size),vaddr,ALIGN(size,NET_IP_ALIGN));
 
 		if(likely(page_to_nid(page) == numa_node_id())){
 			pr_info("%s: return true \n",__func__);
@@ -900,7 +911,7 @@ static bool mnic_add_rx_frag(struct mnic_ring *mnic_ring,struct mnic_rx_buffer *
 	}
 
 	//for fragmentation
-	skb_add_rx_frag(skb,skb_shinfo(skb)->nr_frags,page,rx_buffer->page_offset,size,truesize);
+	//skb_add_rx_frag(skb,skb_shinfo(skb)->nr_frags,page,rx_buffer->page_offset,size,truesize);
 
 	pr_info("%s: mnic_can_reuse_rx_page \n",__func__);
 	pr_info("%s: end \n",__func__);
@@ -913,13 +924,15 @@ static struct sk_buff *mnic_fetch_rx_buffer(struct mnic_ring *rx_ring,struct des
 	struct page *page;
 	struct mnic_rx_buffer *rx_buffer = &rx_ring->rx_buf_info[rx_ring->next_to_clean];
 	
-	pr_info("%s: start \n",__func__);
+	void *page_addr;
 
+	pr_info("%s: start \n",__func__);
+	/*
 	page = rx_buffer->page;
 	prefetchw(page);
 
 	if(likely(!skb)){
-		void *page_addr = page_address(page) + rx_buffer->page_offset;
+		page_addr = page_address(page) + rx_buffer->page_offset;
 		prefetch(page_addr);
 
 #if L1_CACHE_BYTES < 128
@@ -934,9 +947,10 @@ static struct sk_buff *mnic_fetch_rx_buffer(struct mnic_ring *rx_ring,struct des
 		
 		prefetchw(skb->data);
 	}
-	
+	*/
 	/*we are reusing so sync this buffer for cpu use*/
 	/*in order for the CPU and devices to see the most up-to-date and correct copy of the DMA buffer*/
+	/*
 	dma_sync_single_range_for_cpu(rx_ring->dev,rx_buffer->dma,rx_buffer->page_offset,MNIC_RX_BUFSZ,DMA_FROM_DEVICE);
 	
 	if(mnic_add_rx_frag(rx_ring,rx_buffer,rx_desc,skb)){
@@ -947,6 +961,18 @@ static struct sk_buff *mnic_fetch_rx_buffer(struct mnic_ring *rx_ring,struct des
 		dma_unmap_page(rx_ring->dev,rx_buffer->dma,PAGE_SIZE,DMA_FROM_DEVICE);
 		pr_info("%s: dma_unmap_page \n",__func__);
 	}
+	*/
+	
+	//allocate a skbuff for rx on a specific device and and align ip
+	skb = netdev_alloc_skb_ip_align(rx_ring->ndev,rx_desc->length + NET_IP_ALIGN);
+	if(unlikely(!skb)){
+		rx_ring->rx_stats.alloc_failed++;
+		return NULL;
+	}
+
+	pr_info("%s: rx_ring->dma is %#llx, rx_desc->length is %lld",__func__,rx_ring->rx_dma,rx_desc->length);
+	skb_copy_to_linear_data_offset(skb,NET_IP_ALIGN,rx_ring->rx_buf,rx_desc->length);
+	skb_put(skb,rx_desc->length);
 
 	rx_buffer->page = NULL;
 	
@@ -1042,6 +1068,9 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 		rx_desc = MNIC_RX_DESC(rx_ring,rx_ring->next_to_clean);
 		dma_rmb();
 		
+		dma_unmap_single(rx_ring->dev,rx_desc->addr,2048,DMA_FROM_DEVICE);
+
+		//dma_unmap_single(rx_ring->dev,rx
 		skb = mnic_fetch_rx_buffer(rx_ring,rx_desc,skb);
 		if(!skb){
 			pr_err("%s: failed to fetch rx buffer\n",__func__);
@@ -1053,13 +1082,14 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 		mnic_is_non_eop(rx_ring,rx_desc);
 		total_bytes += skb->len;
 		skb_record_rx_queue(skb,rx_ring->queue_idx);
+
 		skb->protocol = eth_type_trans(skb,rx_ring->ndev);
 		skb->ip_summed = CHECKSUM_NONE;
+
 		napi_gro_receive(&q_vector->napi,skb);
 
 		skb = NULL;
 		total_packets++;
-		pr_info("%s: total packet is %d\n",__func__,total_packets);
 	}while(likely(total_packets < budget));
 
 	rx_ring->skb = skb;
@@ -1070,10 +1100,10 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 	q_vector->rx.total_packets += total_packets;
 	q_vector->rx.total_bytes += total_bytes;
 
-	/*
-	if(cleaned_count > 150){
+		
+	if(cleaned_count==50){
 		mnic_alloc_rx_buffers(rx_ring,cleaned_count,q_vector->adapter);
-	}*/
+	}
 
 	pr_info("%s: end \n",__func__);
 
@@ -1342,6 +1372,7 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 	dma = dma_map_single(tx_ring->dev,skb->data,size,DMA_TO_DEVICE);
 	tx_buff = first;
 
+	pr_info("%s: 1 \n",__func__);
 	for(frag = &skb_shinfo(skb)->frags[0];;frag++){
 		if(dma_mapping_error(tx_ring->dev,dma)){
 			goto dma_error;
@@ -1349,13 +1380,16 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 		
 		dma_unmap_len_set(tx_buff,len,size);
 		dma_unmap_addr_set(tx_buff,dma,dma);
+		pr_info("%s: 2 \n",__func__);
 	
 		tx_desc->addr = cpu_to_le64(dma);
-		tx_desc->length = data_len;
-		pr_info("%s: skb dma addr is %llx, length is %d",__func__,dma,data_len);
+		tx_desc->length = skb->len;
+		//tx_desc->length = data_len;
+		pr_info("%s: skb dma addr is %llx, length is %d",__func__,dma,skb->len);
 		
 		while(unlikely(size > MNIC_MAX_DATA_PER_TXD)){
 			//tx_desc->read.cmd_type_len = cpu_to_le32(cmd_type ^ MNIC_MAX_DATA_PER_TXD);
+			pr_info("%s: 3 \n",__func__);
 			i++;
 			tx_desc++;
 	
@@ -1366,12 +1400,14 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 			
 			//tx_desc->read.olinfo_status = 0;
 			
+			pr_info("%s: 4 \n",__func__);
 			dma += MNIC_MAX_DATA_PER_TXD;
 			size -= MNIC_MAX_DATA_PER_TXD;
 
 			tx_desc->addr = cpu_to_le64(dma);
-			tx_desc->length = data_len;
-			pr_info("%s: skb dma addr is %llx, length is %d",__func__,dma,data_len);
+			tx_desc->length = skb->len;
+			//tx_desc->length = data_len;
+			pr_info("%s: skb dma addr is %llx, length is %d",__func__,dma,skb->len);
 		}
 	
 		if(likely(!data_len)){
@@ -1379,6 +1415,8 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 		}
 
 		//tx_desc->read.cmd_type_len = cpu_to_le64(cmd_type ^ size);
+
+		pr_info("%s: 5 \n",__func__);
 
 		i++;
 		tx_desc++;
@@ -1410,7 +1448,7 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 	//notify index
 	adapter->bar4->tx_desc_tail[q_idx] = i;
 	
-	mnic_maybe_stop_tx(tx_ring,DESC_NEEDED);
+	//mnic_maybe_stop_tx(tx_ring,DESC_NEEDED);
 
 	pr_info("%s: end \n",__func__);
 
@@ -1773,7 +1811,7 @@ static int mnic_alloc_q_vector(struct mnic_adapter *adapter,int v_count,int v_id
 		return -ENOMEM;
 	}
 
-	netif_napi_add(adapter->ndev,&q_vector->napi,mnic_poll,64);
+	netif_napi_add(adapter->ndev,&q_vector->napi,mnic_poll,MNIC_NAPI_WEIGHT);
 
 	adapter->q_vector[v_idx] = q_vector;
 	q_vector->adapter = adapter;

@@ -1,20 +1,22 @@
 /*TX/RX descriptor defines*/
-#define MNIC_DEFAULT_TXD	256
-#define MNIC_MIN_TXD		80
-#define MNIC_DEFAULT_TX_WORK  128
-#define MNIC_MAX_TXD		4096
+#define MNIC_DEFAULT_TXD	50
+#define MNIC_MIN_TXD		50
+#define MNIC_DEFAULT_TX_WORK    50
+#define MNIC_MAX_TXD		50
 #define MNIC_MAX_TXD_PWR	15
 #define MNIC_MAX_DATA_PER_TXD   (1u << MNIC_MAX_TXD_PWR)
 
-#define MNIC_DEFAULT_RXD	256
-#define MNIC_MIN_RXD		80
-#define MNIC_MAX_RXD		4096
+#define MNIC_DEFAULT_RXD	50
+#define MNIC_MIN_RXD		50
+#define MNIC_MAX_RXD		50
 
 #define MAX_Q_VECTORS		8
 
-#define MNIC_MAX_TX_QUEUES	8
-#define MNIC_MAX_RX_QUEUES	8
-#define MAX_MSIX_ENTRIES	16
+#define MNIC_MAX_TX_QUEUES	4	
+#define MNIC_MAX_RX_QUEUES	4
+#define MAX_MSIX_ENTRIES	8
+
+#define MNIC_NAPI_WEIGHT	1
 
 #define MNIC_DEFAULT_ITR	3
 
@@ -122,13 +124,10 @@ struct mnic_tx_register{
 
 struct mnic_bar4
 {	
-	uint64_t tx_desc_base[8];
-	uint64_t rx_desc_base[8];
-	
-	uint64_t tx_desc_tail[8];
-	uint64_t rx_desc_tail[8];
-
-	//uint32_t enabled;
+	uint64_t tx_desc_base[4];
+	uint64_t rx_desc_base[4];
+	uint64_t tx_desc_tail[4];
+	uint64_t rx_desc_tail[4];
 }__attribute__((packed));
 
 struct mnic_bar0{
@@ -253,6 +252,9 @@ struct mnic_ring{
 	uint16_t count;
 	uint8_t queue_idx; //logical index 
 	uint8_t reg_idx; //physical index
+
+	dma_addr_t rx_dma;
+	void *rx_buf;
 	
 	uint16_t next_to_clean;
 	uint16_t next_to_use;
