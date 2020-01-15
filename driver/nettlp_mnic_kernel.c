@@ -491,25 +491,7 @@ static int mnic_request_irq(struct mnic_adapter *adapter)
 		goto request_done;
 	}
 	else{
-	/*	mnic_free_all_tx_resources(adapter);
-		mnic_free_all_rx_resources(adapter);
-
-		mnic_clear_interrupt_scheme(adapter);
-		ret = mnic_init_interrupt_scheme(adpter,false);
-		if(ret){
-			goto request_done;
-		}	
-	
-		mnic_setup_all_tx_resources(adpter);
-		mnic_setup_all_rx_resources(adpter);
-		mnic_configure(adpter);
-
-		//mnic_assign_vector(adpter->q_vector[0],0);
-
-		ret = request_irq(pdev->irq,mnic_itr,IRQ_SHARED,ndev->name,adpter):*/
-		if(ret){
-			pr_info("%s: failed to get irq\n",__func__);
-		}
+		pr_info("%s: failed to get irq\n",__func__);
 	}
 
 request_done:
@@ -544,9 +526,6 @@ static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector)
 	
 		tx_buff->next_to_watch = NULL;
 
-		//total_bytes += tx_buffer->bytecount;
-		//total_packes += tx_buffer->gso_segs;
-		
 		dev_kfree_skb_any(tx_buff->skb);
 		
 		dma_unmap_single(tx_ring->dev,dma_unmap_addr(tx_buff,dma),dma_unmap_len(tx_buff,len),DMA_TO_DEVICE);
@@ -608,19 +587,12 @@ static bool mnic_is_non_eop(struct mnic_ring *rx_ring,struct descriptor *rx_desc
 	
 	prefetch(MNIC_RX_DESC(rx_ring,ntc));
 
-	/*	
-	if(likely(mnic_test_staterr(rx_desc,MNIC_RXD_STAT_EOP))){
-		pr_info("%s: end of packets \n",__func__);
-		pr_info("%s: end \n",__func__);
-		return false;
-	}*/
-	
 	pr_info("%s: end of packets \n",__func__);
 	pr_info("%s: end \n",__func__);
 
 	return true;
 }
-
+/*
 static void mnic_pull_tail(struct mnic_ring *rx_ring,struct descriptor *rx_desc,struct sk_buff *skb)
 {
 	unsigned char *vaddr;
@@ -631,16 +603,12 @@ static void mnic_pull_tail(struct mnic_ring *rx_ring,struct descriptor *rx_desc,
 
 	vaddr = skb_frag_address(frag);
 	
-	/*
-	we need the header to contain the greater of either ETH_HLEN or 
-	60 bytes if the skb->len is less than 60 for skb_pad
-	*/
 	pull_len = eth_get_headlen(vaddr,MNIC_RX_HDR_LEN);
 
-	/*align pull length to size of long to optimize memcpy performance*/
+	//align pull length to size of long to optimize memcpy performance
 	skb_copy_to_linear_data(skb,vaddr,ALIGN(pull_len,sizeof(long)));
 	
-	/*update all of the pointers*/
+	//update all of the pointers
 	skb_frag_size_sub(frag,pull_len);
 	frag->page_offset += pull_len;
 	skb->data_len -= pull_len;
@@ -648,6 +616,8 @@ static void mnic_pull_tail(struct mnic_ring *rx_ring,struct descriptor *rx_desc,
 	
 	pr_info("%s: end \n",__func__);
 }
+*/
+/*
 static bool mnic_cleanup_headers(struct mnic_ring *rx_ring,struct descriptor *rx_desc,struct sk_buff *skb)
 {
 	pr_info("%s: start \n",__func__);
@@ -660,7 +630,6 @@ static bool mnic_cleanup_headers(struct mnic_ring *rx_ring,struct descriptor *rx
 		}
 	}
 
-	/*place header in linear portion of buffer*/
 	if(skb_is_nonlinear(skb)){
 		mnic_pull_tail(rx_ring,rx_desc,skb);
 	}
@@ -679,6 +648,7 @@ static bool mnic_cleanup_headers(struct mnic_ring *rx_ring,struct descriptor *rx
 
 	return false;
 }
+*/
 
 static inline unsigned int mnic_rx_pg_order(struct mnic_ring *ring)
 {
@@ -692,7 +662,6 @@ static bool mnic_alloc_mapped_page(struct mnic_ring *rx_ring,struct mnic_rx_buff
 {
 	struct page *page = rb->page;
 	dma_addr_t dma;
-	dma_addr_t rx_dma;
 	
 	pr_info("%s: start \n",__func__);
 
@@ -817,7 +786,7 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 #endif
 	return true;
 }*/
-
+/*
 static void mnic_reuse_rx_page(struct mnic_ring *rx_ring,struct mnic_rx_buffer *old_buff)
 {
 	struct mnic_rx_buffer *new_buff;
@@ -832,7 +801,8 @@ static void mnic_reuse_rx_page(struct mnic_ring *rx_ring,struct mnic_rx_buffer *
 
 	dma_sync_single_range_for_device(rx_ring->dev,old_buff->dma,old_buff->page_offset,MNIC_RX_BUFSZ,DMA_FROM_DEVICE);
 }
-
+*/
+/*
 static bool mnic_can_reuse_rx_page(struct mnic_rx_buffer *rx_buffer)
 {
 	unsigned int pagecnt_bias = rx_buffer->pagecnt_bias;
@@ -854,6 +824,7 @@ static bool mnic_can_reuse_rx_page(struct mnic_rx_buffer *rx_buffer)
 	pr_info("%s: end \n",__func__);
 	return true;
 }
+*/
 /*
 static bool mnic_can_reuse_rx_page(struct mnic_rx_buffer *rx_buffer,struct page *page,unsigned int truesize)
 {
@@ -879,15 +850,11 @@ static bool mnic_can_reuse_rx_page(struct mnic_rx_buffer *rx_buffer,struct page 
 		return true;
 }
 */
+/*
 static bool mnic_add_rx_frag(struct mnic_ring *mnic_ring,struct mnic_rx_buffer *rx_buffer,struct descriptor *rx_desc,struct sk_buff *skb)
 {
 	struct page *page = rx_buffer->page;
 	uint32_t size = rx_desc->length;
-#if (PAGE_SIZE < 8192)
-	unsigned int truesize = MNIC_RX_BUFSZ;
-#else
-	unsigned int truesize = ALIGN(size,L1_CACHE_BYTES);
-#endif
 
 	pr_info("%s: start \n",__func__);
 
@@ -916,15 +883,15 @@ static bool mnic_add_rx_frag(struct mnic_ring *mnic_ring,struct mnic_rx_buffer *
 	pr_info("%s: mnic_can_reuse_rx_page \n",__func__);
 	pr_info("%s: end \n",__func__);
 
-	return mnic_can_reuse_rx_page(rx_buffer/*,page,truesize*/);  
+	return mnic_can_reuse_rx_page(rx_buffer);  
 }
-
+*/
 static struct sk_buff *mnic_fetch_rx_buffer(struct mnic_ring *rx_ring,struct descriptor *rx_desc,struct sk_buff *skb)
 {
-	struct page *page;
+	//struct page *page;
 	struct mnic_rx_buffer *rx_buffer = &rx_ring->rx_buf_info[rx_ring->next_to_clean];
 	
-	void *page_addr;
+	//void *page_addr;
 
 	pr_info("%s: start \n",__func__);
 	/*
@@ -1114,7 +1081,6 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 static int mnic_poll(struct napi_struct *napi,int budget)
 {
 	bool clean_complete = true;
-	int work_done = 0;
 	struct mnic_q_vector *q_vector = container_of(napi,struct mnic_q_vector,napi);
 
 	/*
@@ -1224,14 +1190,6 @@ static int __mnic_open(struct net_device *ndev,bool resuming)
 	}
 	pr_info("%s: mnic_alloc_rx_buffer done",__func__);
 
-	/*
-	ret = mnic_request_irq(adapter);
-	if(ret){
-		goto err_req_irq;
-	}
-	pr_info("%s: mnic_request_irq done",__func__);
-	*/
-
 	/* Notify the stack of the actual queue counts.*/
 	ret = netif_set_real_num_tx_queues(adapter->ndev,adapter->num_tx_queues);
 	if(ret){
@@ -1245,18 +1203,8 @@ static int __mnic_open(struct net_device *ndev,bool resuming)
 	}
 	pr_info("%s: netif_set_real_num_rx_queues done",__func__);
 
-	/*
-	for(i=0;i<adapter->num_q_vectors;i++){
-		napi_enable(&(adapter->q_vector[i]->napi));
-	}
-	pr_info("%s: napi_enable done",__func__);
-	*/
-
-	//mnic_irq_enable(adpter);
 	netif_tx_start_all_queues(ndev);
 	pr_info("%s: netif_tx_start_all_queues done",__func__);
-	
-	//nettlp_msg_init(adapter->bar4_start,PCI_DEVID(adapter->pdev->bus->number,adapter->pdev->devfn),adapter->bar2);
 
 	pr_info("%s: end \n",__func__);
 	return 0;
@@ -1514,7 +1462,6 @@ dma_error:
 
 void mnic_down(struct mnic_adapter *adapter)
 {
-	int i;
 	struct net_device *ndev = adapter->ndev;
 	
 	pr_info("%s: start\n",__func__);
@@ -1543,7 +1490,6 @@ void mnic_down(struct mnic_adapter *adapter)
 
 static int __mnic_close(struct net_device *ndev,bool suspending)
 {
-	int i;
 	struct mnic_adapter *adapter = netdev_priv(ndev);
 	struct pci_dev *pdev = adapter->pdev;
 
@@ -2018,7 +1964,7 @@ static int mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 {
 	int i,ret;
 	int pci_using_dac;	
-	void *bar0,*bar2,*bar4;
+	static void *bar0,*bar2,*bar4;
 	uint64_t bar0_start,bar0_len;
 	uint64_t bar2_start,bar2_len;
 	uint64_t bar4_start,bar4_len;
@@ -2183,8 +2129,8 @@ err9:
 	mnic_clear_interrupt_scheme(adapter);
 //err8:
 	//kfree(m_adapter->rx_tasklet);
-err7:
-	unregister_netdev(ndev);
+/*err7:
+	unregister_netdev(ndev);*/
 err6:
 	iounmap(bar4);
 err5:
