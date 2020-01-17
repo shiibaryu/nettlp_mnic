@@ -1068,7 +1068,7 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 	q_vector->rx.total_bytes += total_bytes;
 
 		
-	if(cleaned_count==50){
+	if(cleaned_count > 45){
 		mnic_alloc_rx_buffers(rx_ring,cleaned_count,q_vector->adapter);
 	}
 
@@ -1964,7 +1964,7 @@ static int mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 {
 	int i,ret;
 	int pci_using_dac;	
-	static void *bar0,*bar2,*bar4;
+	void *bar0,*bar2,*bar4;
 	uint64_t bar0_start,bar0_len;
 	uint64_t bar2_start,bar2_len;
 	uint64_t bar4_start,bar4_len;

@@ -61,6 +61,7 @@ struct rx_desc_ctl{
 struct tap_rx_ctl{
 	int tap_fd;
 	int *rx_state;
+	uintptr_t *rx_desc_base;
 	pthread_t tid;
 	struct descriptor *rx_desc;
 	struct nettlp_msix *rx_irq;
@@ -196,22 +197,23 @@ void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 		}
 		info("read tx pkt from %#lx, %lu-byte",tx_desc->addr,tx_desc->length);
 
-	 	info("write");
 		ret = write(mnic->tap_fd,buf,tx_desc->length);
 		if(ret < tx_desc->length){
 			fprintf(stderr,"failed to read tx pkt from %lx,%lu-bytes\n",tx_desc->addr,tx_desc->length);
 			perror("write");
 			goto tx_end;
 		}
+		info("TX done. Write to %lx,  %d byte, port is %d, tag is %d, tx_head_idx is %d, tx_tail_idx is %d",txd_ctl->tx_desc_head,ret,nt->port,nt->tag,txd_ctl->tx_head_idx,txd_ctl->tx_tail_idx);
 
 		txd_ctl->tx_tail_idx++;
 		txd_ctl->tx_desc_tail += sizeof(struct descriptor);
 		//buf++;
 		tx_desc++;
 
-		if(txd_ctl->tx_tail_idx >= DESC_ENTRY_SIZE - 1){
+		if(txd_ctl->tx_tail_idx > DESC_ENTRY_SIZE){
 			txd_ctl->tx_tail_idx = 0;
 			txd_ctl->tx_desc_tail = *tx_desc_base;
+			info("Tx update: tx_desc_head %lx",txd_ctl->tx_desc_head);
 		}
 	}
 
@@ -273,23 +275,24 @@ void mnic_rx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 			fprintf(stderr,"failed to read rx desc from %#lx\n",rxd_ctl->rx_desc_tail);
 			return;
 		}
+		/*
 		if(tester > 2){
 			info("dma_read addr at queue %d is %#lx, port is %d, tag is %d",offset,rx_desc->addr,rx_dma_nt[offset]->port,rx_dma_nt[offset]->tag);
-			}
+			}*/
 
 		rx_desc++;
 		rxd_ctl->rx_tail_idx++;
 		rxd_ctl->rx_desc_tail += sizeof(struct descriptor);
 
-		if(rxd_ctl->rx_tail_idx >= DESC_ENTRY_SIZE){	
-			info("rx_tail_idx > DESC_ENTRY_SIZE");
+		if(rxd_ctl->rx_tail_idx > DESC_ENTRY_SIZE){	
 			rxd_ctl->rx_tail_idx = 0;
 			rxd_ctl->rx_desc_tail = *rx_desc_base;
+			info("Rx update: rx_desc_head %lx",rxd_ctl->rx_desc_head);
 		}
 	}
-	
-	//info("rx_head index is %d",rxd_ctl->rx_head_idx);
-	//info("rx_tail index is %d",rxd_ctl->rx_tail_idx);
+		
+	info("rx_head index is %d",rxd_ctl->rx_head_idx);
+	info("rx_tail index is %d",rxd_ctl->rx_tail_idx);
 
 	mnic->rx_nt[offset] = *rx_dma_read_nt;
 	mnic->rx_state[offset] = RX_STATE_READY;
@@ -361,6 +364,7 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 	struct tap_rx_ctl *tap_rx_ctl = arg;
 	char buf[4096];
 	uintptr_t rxd_addr;
+	uintptr_t *rx_desc_base = tap_rx_ctl->rx_desc_base;
 	int tap_fd = tap_rx_ctl->tap_fd;
 	int *rx_state = tap_rx_ctl->rx_state;
 	struct descriptor *rx_desc = tap_rx_ctl->rx_desc;
@@ -431,13 +435,21 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 		//info("rx_irq addr is %#lx, data is %08x",rx_irq->addr,rx_irq->data);
 		rxd_ctl->rx_desc_head += sizeof(struct descriptor);
 		rxd_ctl->rx_head_idx++;
-		
+
+		if(rxd_ctl->rx_head_idx > DESC_ENTRY_SIZE){
+			rxd_ctl->rx_head_idx = 0;
+			rxd_ctl->rx_desc_head = *rx_desc_base;
+			info("Rx update: rx_desc_head %lx",rxd_ctl->rx_desc_head);
+		};
+
+		*rx_state = RX_STATE_READY;
+		/*	
 		if(rxd_ctl->rx_head_idx < rxd_ctl->rx_tail_idx){
 			*rx_state = RX_STATE_READY;
 		}
 		else{
 			*rx_state = RX_STATE_DONE;
-		}
+		}*/
 	}
 	
 	pthread_join(tap_rx_ctl->tid,NULL);
@@ -662,6 +674,8 @@ int main(int argc,char **argv)
 		tap_rx_ctl[i].rx_desc = mnic.rx_desc[i];
 		tap_rx_ctl[i].rxd_ctl = mnic.rx_desc_ctl + i;
 		tap_rx_ctl[i].rx_nt = &mnic.rx_nt[i];
+		tap_rx_ctl[i].rx_desc_base = mnic.rx_desc_base + i;
+		info("rx_desc_base %#lx",*tap_rx_ctl[i].rx_desc_base);
 
 		if((ret = pthread_create(&tap_rx_ctl[i].tid,NULL,nettlp_mnic_tap_read_thread,&tap_rx_ctl[i])) != 0){
 			debug("%d thread failed to be created",i);
