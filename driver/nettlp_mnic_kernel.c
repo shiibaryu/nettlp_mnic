@@ -324,6 +324,7 @@ void mnic_free_rx_resources(struct mnic_ring *rx_ring)
 
 	dma_free_coherent(rx_ring->dev, rx_ring->size,
 			  rx_ring->desc, rx_ring->dma);
+	dma_free_coherent(rx_ring->dev,2048*rx_ring->count,rx_ring->rx_buf,rx_ring->rx_dma);
 	rx_ring->desc = NULL;
 
 	pr_info("%s: end",__func__);
@@ -364,7 +365,7 @@ int mnic_setup_rx_resource(struct mnic_ring *rx_ring,int i,struct mnic_adapter *
 	//notify rx_desc_base
 	adapter->bar4->rx_desc_base[i] = rx_ring->dma;
 	pr_info("rx desc base %d is %llx",i,rx_ring->dma);
-	msleep(1000);
+	//msleep(1000);
 
 	rx_ring->next_to_alloc = 0;
 	rx_ring->next_to_clean = 0;
@@ -409,11 +410,11 @@ static irqreturn_t mnic_msix_ring(int irq,void *data)
 
 	struct mnic_q_vector *q_vector = (struct mnic_q_vector *)data;
 	
-	pr_info("%s: start",__func__);
+	//pr_info("%s: start",__func__);
 
 	napi_schedule(&q_vector->napi);
 
-	pr_info("%s: end",__func__);
+	//pr_info("%s: end",__func__);
 
 	return IRQ_HANDLED;
 }
@@ -510,7 +511,7 @@ static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector)
 	uint32_t budget = q_vector->tx.work_limit;
 	uint32_t i = tx_ring->next_to_clean;
 
-	pr_info("%s: start \n",__func__);
+	//pr_info("%s: start \n",__func__);
 
 	tx_buff = &tx_ring->tx_buf_info[i];
 	tx_desc = MNIC_TX_DESC(tx_ring,i); 
@@ -570,7 +571,7 @@ static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector)
 	i += tx_ring->count;
 	tx_ring->next_to_clean = i;
 	
-	pr_info("%s: end \n",__func__);
+	//pr_info("%s: end \n",__func__);
 
 	return !!budget;
 }
@@ -580,15 +581,15 @@ static bool mnic_is_non_eop(struct mnic_ring *rx_ring,struct descriptor *rx_desc
 {
 	u32 ntc = rx_ring->next_to_clean + 1;
 	
-	pr_info("%s: start \n",__func__);
+	//pr_info("%s: start \n",__func__);
 
 	ntc = (ntc < rx_ring->count) ? ntc : 0;
 	rx_ring->next_to_clean = ntc;
 	
 	prefetch(MNIC_RX_DESC(rx_ring,ntc));
 
-	pr_info("%s: end of packets \n",__func__);
-	pr_info("%s: end \n",__func__);
+	//pr_info("%s: end of packets \n",__func__);
+	//pr_info("%s: end \n",__func__);
 
 	return true;
 }
@@ -707,8 +708,8 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 	uint16_t i = rx_ring->next_to_use;
 	int q_idx = rx_ring->queue_idx;
 
-	pr_info("%s: start \n",__func__);
-	pr_info("%s: queue index is %d \n",__func__,q_idx);
+	//pr_info("%s: start \n",__func__);
+	//pr_info("%s: queue index is %d \n",__func__,q_idx);
 	
 	if(!cleaned_count){
 		return;
@@ -753,10 +754,10 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 		dma_wmb();
 		//notify rx tail
 		adapter->bar4->rx_desc_tail[q_idx] = i;
-		pr_info("rx descriptor tail at %d queue is %d",i,q_idx);
+		//pr_info("rx descriptor tail at %d queue is %d",i,q_idx);
 	}
 
-	pr_info("%s: end \n",__func__);
+	//pr_info("%s: end \n",__func__);
 }
 
 /*static bool mnic_can_reuse_rx_page(struct mnic_rx_buffer *rx_buffer,struct page *page,unsigned int truesize)
@@ -891,45 +892,6 @@ static struct sk_buff *mnic_fetch_rx_buffer(struct mnic_ring *rx_ring,struct des
 	//struct page *page;
 	struct mnic_rx_buffer *rx_buffer = &rx_ring->rx_buf_info[rx_ring->next_to_clean];
 	
-	//void *page_addr;
-
-	pr_info("%s: start \n",__func__);
-	/*
-	page = rx_buffer->page;
-	prefetchw(page);
-
-	if(likely(!skb)){
-		page_addr = page_address(page) + rx_buffer->page_offset;
-		prefetch(page_addr);
-
-#if L1_CACHE_BYTES < 128
-		prefetch(page_addr + L1_CACHE_BYTES);
-#endif	
-		//allocate a skbuff for rx on a specific device and and align ip
-		skb = netdev_alloc_skb_ip_align(rx_ring->ndev,rx_desc->length + NET_IP_ALIGN);
-		if(unlikely(!skb)){
-			rx_ring->rx_stats.alloc_failed++;
-			return NULL;
-		}
-		
-		prefetchw(skb->data);
-	}
-	*/
-	/*we are reusing so sync this buffer for cpu use*/
-	/*in order for the CPU and devices to see the most up-to-date and correct copy of the DMA buffer*/
-	/*
-	dma_sync_single_range_for_cpu(rx_ring->dev,rx_buffer->dma,rx_buffer->page_offset,MNIC_RX_BUFSZ,DMA_FROM_DEVICE);
-	
-	if(mnic_add_rx_frag(rx_ring,rx_buffer,rx_desc,skb)){
-		pr_info("%s: reuse_rx_page \n",__func__);
-		mnic_reuse_rx_page(rx_ring,rx_buffer);
-	}
-	else{
-		dma_unmap_page(rx_ring->dev,rx_buffer->dma,PAGE_SIZE,DMA_FROM_DEVICE);
-		pr_info("%s: dma_unmap_page \n",__func__);
-	}
-	*/
-	
 	//allocate a skbuff for rx on a specific device and and align ip
 	skb = netdev_alloc_skb_ip_align(rx_ring->ndev,rx_desc->length + NET_IP_ALIGN);
 	if(unlikely(!skb)){
@@ -937,87 +899,16 @@ static struct sk_buff *mnic_fetch_rx_buffer(struct mnic_ring *rx_ring,struct des
 		return NULL;
 	}
 
-	pr_info("%s: rx_ring->dma is %#llx, rx_desc->length is %lld",__func__,rx_ring->rx_dma,rx_desc->length);
+	//pr_info("%s: rx_ring->dma is %#llx, rx_desc->length is %lld",__func__,rx_ring->rx_dma,rx_desc->length);
 	skb_copy_to_linear_data_offset(skb,NET_IP_ALIGN,rx_ring->rx_buf,rx_desc->length);
 	skb_put(skb,rx_desc->length);
 
 	rx_buffer->page = NULL;
 	
-	pr_info("%s: end \n",__func__);
+	//pr_info("%s: end \n",__func__);
 
 	return skb;
 }
-
-/*
-static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
-{
-	struct mnic_ring *rx_ring = q_vector->rx.ring;
-	struct sk_buff *skb = rx_ring->skb;
-	uint32_t total_bytes = 0,total_packets = 0;
-	uint16_t cleaned_count = mnic_desc_unused(rx_ring); 
-
-	pr_info("%s: start \n",__func__);
-
-	do{
-		struct descriptor *rx_desc;
-		
-		if(cleaned_count >= MNIC_RX_BUFFER_WRITE){
-			mnic_alloc_rx_buffers(rx_ring,cleaned_count,q_vector->adapter);
-			cleaned_count = 0;			
-		}
-
-		rx_desc = MNIC_RX_DESC(rx_ring,rx_ring->next_to_clean);
-		dma_rmb();
-
-		skb = mnic_fetch_rx_buffer(rx_ring,rx_desc,skb);
-		if(!skb){
-			break;
-		}
-	
-		pr_info("%s:skb data len is %d \n",__func__,skb->data_len);	
-		pr_info("%s:skb data is %s \n",__func__,skb->data);	
-
-		cleaned_count++;
-		
-		if(!mnic_is_non_eop(rx_ring,rx_desc)){
-			continue;
-		}
-
-		if(mnic_cleanup_headers(rx_ring,rx_desc,skb)){
-			skb = NULL;
-			continue;
-		}
-		
-		total_bytes += skb->len;
-		pr_info("%s: skb len is %d",__func__,skb->len);
-	
-		skb_record_rx_queue(skb,rx_ring->queue_idx);
-		skb->protocol = eth_type_trans(skb,rx_ring->ndev);
-		skb->ip_summed = CHECKSUM_NONE;
-
-		napi_gro_receive(&q_vector->napi,skb);
-
-		skb = NULL;
-		pr_info("%s: total packet is %d \n",__func__,total_packets);	
-		total_packets++;
-	}while(likely(total_packets < budget));
-	
-	rx_ring->skb = skb;
-	rx_ring->rx_stats.packets += total_packets;
-	rx_ring->rx_stats.bytes += total_bytes;
-	
-	q_vector->rx.total_packets += total_packets;
-	q_vector->rx.total_bytes += total_bytes;
-
-	if(cleaned_count){
-		mnic_alloc_rx_buffers(rx_ring,cleaned_count,q_vector->adapter);
-	}
-	
-	pr_info("%s: end \n",__func__);
-
-	return (total_packets < budget);
-}	
-*/
 
 static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 {
@@ -1025,9 +916,6 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 	struct sk_buff *skb = rx_ring->skb;
 	uint32_t total_bytes = 0, total_packets = 0;
 	uint32_t cleaned_count = mnic_desc_unused(rx_ring);
-
-	pr_info("%s: cleaned count is %d",__func__,cleaned_count);
-	pr_info("%s: budget is %d",__func__,budget);
 
 	do{
 		struct descriptor *rx_desc;
@@ -1037,7 +925,6 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 		
 		dma_unmap_single(rx_ring->dev,rx_desc->addr,2048,DMA_FROM_DEVICE);
 
-		//dma_unmap_single(rx_ring->dev,rx
 		skb = mnic_fetch_rx_buffer(rx_ring,rx_desc,skb);
 		if(!skb){
 			pr_err("%s: failed to fetch rx buffer\n",__func__);
@@ -1068,14 +955,11 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 	q_vector->rx.total_bytes += total_bytes;
 
 		
-	if(cleaned_count > 45){
+	if(cleaned_count > 450){
 		mnic_alloc_rx_buffers(rx_ring,cleaned_count,q_vector->adapter);
 	}
 
-	pr_info("%s: end \n",__func__);
-
 	return true;
-	//return (total_packets < budget);
 }
 
 static int mnic_poll(struct napi_struct *napi,int budget)
@@ -1096,6 +980,8 @@ static int mnic_poll(struct napi_struct *napi,int budget)
 	return 0;
 	*/
 
+//	pr_info("%s:budget is %d\n",__func__,budget);
+
 	if(q_vector->tx.ring){
 		clean_complete = mnic_clean_tx_irq(q_vector);
 	}
@@ -1113,18 +999,8 @@ static int mnic_poll(struct napi_struct *napi,int budget)
 	
 	napi_complete(napi);
 
-	pr_info("%s: end \n",__func__);
+	//pr_info("%s: end \n",__func__);
 	return 0;
-	/*	
-	if(likely(napi_complete_done(napi,work_done))){
-		//rmnic_ring_irq_enable(q_vector);
-		pr_info("%s:napi complete done",__func__);
-	}
-
-	pr_info("%s: end \n",__func__);
-
-	return min(work_done,budget-1);
-	*/
 }
 
 static void mnic_free_irq(struct mnic_adapter *adapter)
@@ -1133,8 +1009,6 @@ static void mnic_free_irq(struct mnic_adapter *adapter)
 	int vector = 0;
 
 	pr_info("%s: start \n",__func__);
-
-	//free_irq(adapter->msix_entries[vector++].vector,adapter);
 
 	for(i=0;i<adapter->num_q_vectors;i++){
 		free_irq(adapter->msix_entries[vector].vector,adapter->q_vector[i]);
@@ -1287,7 +1161,7 @@ static int __mnic_maybe_stop_tx(struct mnic_ring *tx_ring,uint16_t size)
 
 static inline int mnic_maybe_stop_tx(struct mnic_ring *ring,const uint16_t size)
 {
-	pr_info("%s: start \n",__func__);
+	//pr_info("%s: start \n",__func__);
 
 	if(mnic_desc_unused(ring) >= size){
 		return 0;
@@ -1295,7 +1169,7 @@ static inline int mnic_maybe_stop_tx(struct mnic_ring *ring,const uint16_t size)
 	
 	return __mnic_maybe_stop_tx(ring,size);
 
-	pr_info("%s: end \n",__func__);
+	//pr_info("%s: end \n",__func__);
 }
 
 static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,const uint8_t hdr_len,struct mnic_adapter *adapter)
@@ -1310,8 +1184,8 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 	uint16_t i = tx_ring->next_to_use;
 	int q_idx = tx_ring->queue_idx;
 	
-	pr_info("%s: start \n",__func__);
-	pr_info("%s: queue index is %d\n",__func__,q_idx);
+	//pr_info("%s: start \n",__func__);
+	//pr_info("%s: queue index is %d\n",__func__,q_idx);
 
 	tx_desc = MNIC_TX_DESC(tx_ring,i);
 	size = skb_headlen(skb);
@@ -1320,7 +1194,7 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 	dma = dma_map_single(tx_ring->dev,skb->data,size,DMA_TO_DEVICE);
 	tx_buff = first;
 
-	pr_info("%s: 1 \n",__func__);
+	//pr_info("%s: 1 \n",__func__);
 	for(frag = &skb_shinfo(skb)->frags[0];;frag++){
 		if(dma_mapping_error(tx_ring->dev,dma)){
 			goto dma_error;
@@ -1328,16 +1202,16 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 		
 		dma_unmap_len_set(tx_buff,len,size);
 		dma_unmap_addr_set(tx_buff,dma,dma);
-		pr_info("%s: 2 \n",__func__);
+		//pr_info("%s: 2 \n",__func__);
 	
 		tx_desc->addr = cpu_to_le64(dma);
 		tx_desc->length = skb->len;
 		//tx_desc->length = data_len;
-		pr_info("%s: skb dma addr is %llx, length is %d",__func__,dma,skb->len);
+		//pr_info("%s: skb dma addr is %llx, length is %d",__func__,dma,skb->len);
 		
 		while(unlikely(size > MNIC_MAX_DATA_PER_TXD)){
 			//tx_desc->read.cmd_type_len = cpu_to_le32(cmd_type ^ MNIC_MAX_DATA_PER_TXD);
-			pr_info("%s: 3 \n",__func__);
+			//pr_info("%s: 3 \n",__func__);
 			i++;
 			tx_desc++;
 	
@@ -1348,14 +1222,14 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 			
 			//tx_desc->read.olinfo_status = 0;
 			
-			pr_info("%s: 4 \n",__func__);
+			//pr_info("%s: 4 \n",__func__);
 			dma += MNIC_MAX_DATA_PER_TXD;
 			size -= MNIC_MAX_DATA_PER_TXD;
 
 			tx_desc->addr = cpu_to_le64(dma);
 			tx_desc->length = skb->len;
 			//tx_desc->length = data_len;
-			pr_info("%s: skb dma addr is %llx, length is %d",__func__,dma,skb->len);
+			//pr_info("%s: skb dma addr is %llx, length is %d",__func__,dma,skb->len);
 		}
 	
 		if(likely(!data_len)){
@@ -1364,7 +1238,7 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 
 		//tx_desc->read.cmd_type_len = cpu_to_le64(cmd_type ^ size);
 
-		pr_info("%s: 5 \n",__func__);
+		//pr_info("%s: 5 \n",__func__);
 
 		i++;
 		tx_desc++;
@@ -1398,7 +1272,7 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 	
 	//mnic_maybe_stop_tx(tx_ring,DESC_NEEDED);
 
-	pr_info("%s: end \n",__func__);
+	//pr_info("%s: end \n",__func__);
 
 	return 0;
 
@@ -1485,7 +1359,7 @@ void mnic_down(struct mnic_adapter *adapter)
 	mnic_clean_all_tx_rings(adapter);
 	mnic_clean_all_rx_rings(adapter);
 	
-	pr_info("%s: end\n",__func__);
+	//pr_info("%s: end\n",__func__);
 }
 
 static int __mnic_close(struct net_device *ndev,bool suspending)
@@ -1535,7 +1409,7 @@ static netdev_tx_t mnic_xmit_frame_ring(struct sk_buff *skb,struct mnic_ring *tx
 	//uint32_t flags;
 	//uint32_t count = TXD_USE_COUNT(skb_headlen(skb));
 
-	pr_info("%s: start \n",__func__);
+	//pr_info("%s: start \n",__func__);
 
 	tx_buff = &tx_ring->tx_buf_info[tx_ring->next_to_use];
 	tx_buff->skb = skb;
@@ -1548,7 +1422,7 @@ static netdev_tx_t mnic_xmit_frame_ring(struct sk_buff *skb,struct mnic_ring *tx
 	
 	//mnic_maybe_stop_tx(tx_ring,DESC_NEEDED);
 
-	pr_info("%s: end \n",__func__);
+	//pr_info("%s: end \n",__func__);
 
 	return NETDEV_TX_OK;
 }
@@ -1557,14 +1431,14 @@ static inline struct mnic_ring *mnic_tx_queue_mapping(struct mnic_adapter *adapt
 {
 	uint32_t r_idx = skb->queue_mapping;
 	
-	pr_info("%s: start \n",__func__);
+	//pr_info("%s: start \n",__func__);
 
 	if(r_idx >= adapter->num_tx_queues){
 		r_idx = r_idx % adapter->num_tx_queues;
 	}
 
-	pr_info("%s: queue mapping is %d\n",__func__,r_idx);
-	pr_info("%s: end \n",__func__);
+	//pr_info("%s: queue mapping is %d\n",__func__,r_idx);
+	//pr_info("%s: end \n",__func__);
 	return adapter->tx_ring[r_idx];
 }
 
@@ -1572,14 +1446,14 @@ static netdev_tx_t mnic_xmit_frame(struct sk_buff *skb,struct net_device *netdev
 {
 	struct mnic_adapter *adapter = netdev_priv(netdev);
 	
-	pr_info("%s: start \n",__func__);
+	//pr_info("%s: start \n",__func__);
 
 	if(skb_put_padto(skb,17)){
 		return NETDEV_TX_OK;
 	}
 
 	return mnic_xmit_frame_ring(skb,mnic_tx_queue_mapping(adapter,skb),adapter);
-	pr_info("%s: end \n",__func__);
+	//pr_info("%s: end \n",__func__);
 }
 
 static int nettlp_mnic_set_mac(struct net_device *ndev,void *p)
@@ -1984,6 +1858,7 @@ static int mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 	}	
 
 	//to read and write 64 bit memory
+	/*
 	ret = dma_set_mask_and_coherent(&pdev->dev,DMA_BIT_MASK(64));
 	if(!ret){
 		pci_using_dac = 1;	
@@ -1994,7 +1869,7 @@ static int mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 			pr_info("%s: No usable DMA configuration",__func__);
 			goto err6;
 		}
-	}
+	}*/
 
 	//reserver I/O region
 	ret = pci_request_regions(pdev,DRV_NAME);
@@ -2086,7 +1961,7 @@ static int mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 	ndev->netdev_ops = &nettlp_mnic_ops;
 	ndev->min_mtu = ETH_MIN_MTU;
 	ndev->max_mtu = ETH_MAX_MTU;
-	ndev->features = NETIF_F_LLTX;
+	//ndev->features = NETIF_F_LLTX;
 
 	//initialize the private structure
 	ret = mnic_sw_init(adapter);

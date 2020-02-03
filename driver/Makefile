@@ -1,4 +1,4 @@
-KERNELSRCDIR := /lib/modules/4.15.0-74-generic/build
+KERNELSRCDIR := /lib/modules/4.15.0-76-generic/build
 BUILD_DIR := $(shell pwd)
 VERBOSE = 0
 
