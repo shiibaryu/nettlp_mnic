@@ -1,14 +1,14 @@
 /*TX/RX descriptor defines*/
-#define MNIC_DEFAULT_TXD	50
-#define MNIC_MIN_TXD		50
-#define MNIC_DEFAULT_TX_WORK    50
-#define MNIC_MAX_TXD		50
+#define MNIC_DEFAULT_TXD	256
+#define MNIC_MIN_TXD		256
+#define MNIC_DEFAULT_TX_WORK    1
+#define MNIC_MAX_TXD		256
 #define MNIC_MAX_TXD_PWR	15
 #define MNIC_MAX_DATA_PER_TXD   (1u << MNIC_MAX_TXD_PWR)
 
-#define MNIC_DEFAULT_RXD	50
-#define MNIC_MIN_RXD		50
-#define MNIC_MAX_RXD		50
+#define MNIC_DEFAULT_RXD	256
+#define MNIC_MIN_RXD		256
+#define MNIC_MAX_RXD		256
 
 #define MAX_Q_VECTORS		8
 
@@ -147,6 +147,7 @@ struct mnic_ring{
 	uint16_t next_to_clean;
 	uint16_t next_to_use;
 	uint16_t next_to_alloc;
+	uint16_t q_idx;
 
 	union{
 		struct{
