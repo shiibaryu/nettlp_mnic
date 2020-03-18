@@ -174,9 +174,9 @@ void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 
 	tx_desc += txd_ctl->tx_tail_idx;
 	buf += txd_ctl->tx_tail_idx;
-	
+
 	while(txd_ctl->tx_tail_idx != idx){
-		info("dma read tx desc: addr %#lx, tail idx %d, offset %d",txd_ctl->tx_desc_tail,txd_ctl->tx_tail_idx,offset);
+		info("dma read tx desc: addr %#lx, tail idx %d, idx %d,offset %d",txd_ctl->tx_desc_tail,idx,txd_ctl->tx_tail_idx,offset);
 		//ret = dma_read(nt,txd_ctl->tx_desc_tail,tx_desc,sizeof(struct descriptor));
 		ret = dma_read(&mnic->tx_nt[offset],txd_ctl->tx_desc_tail,tx_desc,sizeof(struct descriptor));
 		if(ret < sizeof(struct descriptor)){

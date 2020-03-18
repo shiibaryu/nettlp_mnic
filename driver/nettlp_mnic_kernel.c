@@ -506,11 +506,16 @@ static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector,int napi_budget)
 	//uint32_t clean_idx = tx_ring->next_to_clean;
 	//uint32_t next_to_use = tx_ring->next_to_use;
 
-	//pr_info("%s: start \n",__func__);
+	pr_info("%s: start \n",__func__);
+
+	pr_info("%s: i is %d \n",__func__,i);
+	pr_info("%s: budget is %d \n",__func__,budget);
 
 	tx_buff = &tx_ring->tx_buf_info[i];
 	tx_desc = MNIC_TX_DESC(tx_ring,i); 
 	i -= tx_ring->count;
+	pr_info("%s: i - tx_ring->count is %d \n",__func__,i);
+	pr_info("%s: tx_ring->count is %d \n",__func__,tx_ring->count);
 
 	do{
 		struct descriptor *eop_desc = tx_buff->next_to_watch;
@@ -531,6 +536,8 @@ static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector,int napi_budget)
 		napi_consume_skb(tx_buff->skb,napi_budget);
 		
 		dma_unmap_single(tx_ring->dev,dma_unmap_addr(tx_buff,dma),dma_unmap_len(tx_buff,len),DMA_TO_DEVICE);
+		//dma_unmap_single(tx_ring->dev,tx_ring->dma,sizeof(struct descriptor),DMA_BIDIRECTIONAL);
+
 		/*clear all tx_buffer data*/
 		tx_buff->skb = NULL;
 		dma_unmap_len_set(tx_buff,len,0);
@@ -560,7 +567,6 @@ static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector,int napi_budget)
 
 		if(unlikely(!i)){
 			i -= tx_ring->count;
-			//clean_idx = 0;
 			tx_buff = tx_ring->tx_buf_info;
 			tx_desc = MNIC_TX_DESC(tx_ring,0);
 		}
@@ -569,9 +575,11 @@ static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector,int napi_budget)
 		prefetch(tx_desc);
 
 		budget--;
+		pr_info("%s: budget is %d \n",__func__,budget);
 	}while(likely(budget));
 
 	i += tx_ring->count;
+	pr_info("%s: i + tx_ring->count is %d \n",__func__,i);
 	tx_ring->next_to_clean = i;
 	
 	//pr_info("%s: end \n",__func__);
@@ -736,8 +744,9 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 		//rx_desc->addr = cpu_to_le64(rb->dma + rb->page_offset);
 		rx_desc->addr = rx_ring->rx_dma;
 		rx_desc->length = 2048;
-		//dma_map_single(rx_ring->dev,rx_ring->rx_buf,2048,DMA_FROM_DEVICE);
+
 		dma_map_single(rx_ring->dev,rx_desc,sizeof(rx_desc),DMA_BIDIRECTIONAL);
+		dma_map_single(rx_ring->dev,rx_buf,sizeof(rx_buf),DMA_FROM_DEVICE);
 		
 		rx_desc++;
 		rx_buf++;
@@ -1192,22 +1201,24 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 	struct descriptor *tx_desc;
 	skb_frag_t *frag;
 	dma_addr_t dma;
-	unsigned int data_len,size;
+	//unsigned int data_len,size;
 	//uint32_t tx_flags = first->tx_flags;
 	uint16_t i = tx_ring->next_to_use;
-	//int q_idx = tx_ring->queue_idx;
-	int q_idx = 0;
-	
+	int q_idx = tx_ring->queue_idx;
+	uint32_t pktlen = skb->len;
+
 	tx_desc = MNIC_TX_DESC(tx_ring,i);
 	//size = skb_headlen(skb);
-	data_len = skb->data_len;
+	//data_len = skb->data_len;
 
 	//dma = dma_map_single(tx_ring->dev,skb->data,size,DMA_TO_DEVICE);
-	dma = dma_map_single(tx_ring->dev,skb_mac_header(skb),skb->len,DMA_TO_DEVICE);
-	tx_buff = first;
+	dma = dma_map_single(tx_ring->dev,skb_mac_header(skb),pktlen,DMA_TO_DEVICE);
+	//tx_buff = first;
 	
 	tx_desc->addr = dma;
-	tx_desc->length = skb->len;
+	tx_desc->length = pktlen;
+	dma_map_single(tx_ring->dev,tx_desc,sizeof(struct descriptor),DMA_BIDIRECTIONAL);
+
 	pr_info("tx pkt dma addr %#llx, length %lld, q idx %d\n",tx_desc->addr,tx_desc->length,q_idx);
 	/*
 	for(frag = &skb_shinfo(skb)->frags[0];;frag++){
@@ -1268,6 +1279,9 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 	tx_ring->next_to_use = i;
 	adapter->bar4->tx_desc_tail[q_idx] = i;
 	pr_info("tail idx is %d, q idx is %d\n",i,q_idx);
+
+	adapter->ndev->stats.tx_packets++;
+	adapter->ndev->stats.tx_bytes += pktlen;
 
 	return 0;
 
@@ -1435,7 +1449,7 @@ static inline struct mnic_ring *mnic_tx_queue_mapping(struct mnic_adapter *adapt
 	//adapter->tx_ring->q_idx = r_idx;
 	pr_info("%s: queue mapping is %d\n",__func__,r_idx);
 	//pr_info("%s: end \n",__func__);
-	return adapter->tx_ring[0];
+	return adapter->tx_ring[r_idx];
 }
 
 static netdev_tx_t mnic_xmit_frame(struct sk_buff *skb,struct net_device *netdev)
@@ -1853,27 +1867,11 @@ static int mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 		goto err1;
 	}	
 
-	//to read and write 64 bit memory
-	/*
-	ret = dma_set_mask_and_coherent(&pdev->dev,DMA_BIT_MASK(64));
-	if(!ret){
-		pci_using_dac = 1;	
-	}
-	else{
-		ret = dma_set_mask_and_coherent(&pdev->dev,DMA_BIT_MASK(32));
-		if(ret){
-			pr_info("%s: No usable DMA configuration",__func__);
-			goto err6;
-		}
-	}*/
-
 	//reserver I/O region
 	ret = pci_request_regions(pdev,DRV_NAME);
 	if(ret){
 		goto err2;
 	}
-
-	pci_enable_pcie_error_reporting(pdev);
 
 	//enable dma 
 	pci_set_master(pdev);
@@ -1970,9 +1968,6 @@ static int mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 	if(ret){
 		goto err10;
 	}
-
-	/*------------------------------------------------------*/
-
 	
 	/*request irq for nettlp_msg_init*/
 	ret = mnic_request_irq(adapter);
