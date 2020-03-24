@@ -516,6 +516,8 @@ static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector,int napi_budget)
 	i -= tx_ring->count;
 	pr_info("%s: i - tx_ring->count is %d \n",__func__,i);
 	pr_info("%s: tx_ring->count is %d \n",__func__,tx_ring->count);
+	
+	dma_unmap_single(tx_ring->dev,tx_desc->addr,sizeof(struct descriptor),DMA_BIDIRECTIONAL);
 
 	do{
 		struct descriptor *eop_desc = tx_buff->next_to_watch;
@@ -541,8 +543,6 @@ static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector,int napi_budget)
 		/*clear all tx_buffer data*/
 		tx_buff->skb = NULL;
 		dma_unmap_len_set(tx_buff,len,0);
-		
-		/*clear last DMA location and unmap remaining buffers*/
 		while(tx_desc != eop_desc){
 			tx_buff++;
 			tx_desc++;
@@ -582,7 +582,7 @@ static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector,int napi_budget)
 	pr_info("%s: i + tx_ring->count is %d \n",__func__,i);
 	tx_ring->next_to_clean = i;
 	
-	//pr_info("%s: end \n",__func__);
+	pr_info("%s: end \n",__func__);
 
 	return !!budget;
 }
@@ -720,10 +720,11 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 	int q_idx = rx_ring->queue_idx;
 	void *rx_buf;
 
-	//pr_info("%s: start \n",__func__);
-	//pr_info("%s: queue index is %d \n",__func__,q_idx);
+	pr_info("%s: start \n",__func__);
+	pr_info("%s: queue index is %d \n",__func__,q_idx);
 	
 	if(!cleaned_count){
+		pr_info("%s: !cleaned_count\n",__func__);
 		return;
 	}
 
@@ -761,6 +762,7 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 		}
 
 		cleaned_count--;	
+		pr_info("%s: cleaned_count %d\n",__func__,cleaned_count);
 	}while(cleaned_count);
 
 	i += rx_ring->count;
@@ -772,7 +774,7 @@ void mnic_alloc_rx_buffers(struct mnic_ring *rx_ring,uint16_t cleaned_count,stru
 		adapter->bar4->rx_desc_tail[q_idx] = i;
 	}
 
-	//pr_info("%s: end \n",__func__);
+	pr_info("%s: end \n",__func__);
 }
 
 /*static bool mnic_can_reuse_rx_page(struct mnic_rx_buffer *rx_buffer,struct page *page,unsigned int truesize)
@@ -932,6 +934,7 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 	struct sk_buff *skb = rx_ring->skb;
 	uint32_t total_bytes = 0, total_packets = 0;
 	uint32_t cleaned_count = mnic_desc_unused(rx_ring);
+	pr_info("%s: cleaned_count %d",__func__,cleaned_count);
 
 	do{
 		struct descriptor *rx_desc;
@@ -978,9 +981,11 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 
 		
 	if(cleaned_count > 200){
+		pr_info("%s: cleaned_count > 150\n",__func__);
 		mnic_alloc_rx_buffers(rx_ring,cleaned_count,q_vector->adapter);
 	}
 
+	pr_info("%s: total packets %d < budget %d\n",__func__,total_packets,budget);
 	return true;
 }
 
@@ -1016,12 +1021,13 @@ static int mnic_poll(struct napi_struct *napi,int budget)
 	}
 
 	if(clean_complete == false){
+		pr_info("%s: clean_complete == false\n",__func__);
 		return budget;
 	}
 	
 	napi_complete(napi);
 
-	//pr_info("%s: end \n",__func__);
+	pr_info("%s: end \n",__func__);
 	return 0;
 }
 
@@ -1206,18 +1212,19 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 	uint16_t i = tx_ring->next_to_use;
 	int q_idx = tx_ring->queue_idx;
 	uint32_t pktlen = skb->len;
+	unsigned int size,data_len;
 
 	tx_desc = MNIC_TX_DESC(tx_ring,i);
-	//size = skb_headlen(skb);
-	//data_len = skb->data_len;
+	size = skb_headlen(skb);
+	data_len = skb->data_len;
 
-	//dma = dma_map_single(tx_ring->dev,skb->data,size,DMA_TO_DEVICE);
-	dma = dma_map_single(tx_ring->dev,skb_mac_header(skb),pktlen,DMA_TO_DEVICE);
+	dma = dma_map_single(tx_ring->dev,skb->data,size,DMA_TO_DEVICE);
+	//dma = dma_map_single(tx_ring->dev,skb_mac_header(skb),pktlen,DMA_TO_DEVICE);
 	//tx_buff = first;
 	
 	tx_desc->addr = dma;
 	tx_desc->length = pktlen;
-	dma_map_single(tx_ring->dev,tx_desc,sizeof(struct descriptor),DMA_BIDIRECTIONAL);
+	//dma_map_single(tx_ring->dev,tx_desc,sizeof(struct descriptor),DMA_BIDIRECTIONAL);
 
 	pr_info("tx pkt dma addr %#llx, length %lld, q idx %d\n",tx_desc->addr,tx_desc->length,q_idx);
 	/*
