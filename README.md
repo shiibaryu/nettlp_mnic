@@ -5,7 +5,7 @@ This "nettlp_mnic" is a software network interface card that have modern nic fea
 such as multiqueues and interrupt moderation on NetTLP.<br>
 This software nic can communicate to a virtual/physical machine.<br>
 You can see details about this from the link bellow.
-https://docs.google.com/presentation/d/1YJF75V2110gafoOOSzIRg2iZCoO9HUUT_NnO2iY0-O8/edit?usp=sharing
+https://docs.google.com/presentation/d/1i-49l7w5SLngX0xvS7p9kQvkL_D9TBdTf2Kvr5gU2S8/edit#slide=id.p
 
 ## Archtecture
 <img width="700" src="https://github.com/shiibaryu/nettlp_mnic/blob/master/pic/mnic_arch.png">
