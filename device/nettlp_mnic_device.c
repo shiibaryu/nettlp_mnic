@@ -375,6 +375,7 @@ void *nettlp_mnic_tap_read_thread(void *arg)
 		}
 
 		if(*rx_state != RX_STATE_READY){
+			info("rx_state is not ready");
 			continue;
 		}
 		
@@ -636,7 +637,7 @@ int main(int argc,char **argv)
 		}
 
 		CPU_ZERO(&target_cpu_set);
-		CPU_SET(i,&target_cpu_set);
+		CPU_SET(i+4,&target_cpu_set);
 		pthread_setaffinity_np(tap_rx_ctl[i].tid,sizeof(cpu_set_t),&target_cpu_set);
 	}
 
