@@ -1205,7 +1205,7 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 	struct sk_buff *skb = first->skb;
 	struct mnic_tx_buffer *tx_buff;
 	struct descriptor *tx_desc;
-	skb_frag_t *frag;
+	//skb_frag_t *frag;
 	dma_addr_t dma;
 	//unsigned int data_len,size;
 	//uint32_t tx_flags = first->tx_flags;
@@ -1225,6 +1225,10 @@ static int mnic_tx_map(struct mnic_ring *tx_ring,struct mnic_tx_buffer *first,co
 	tx_desc->addr = dma;
 	tx_desc->length = pktlen;
 	//dma_map_single(tx_ring->dev,tx_desc,sizeof(struct descriptor),DMA_BIDIRECTIONAL);
+
+	if(dma_mapping_error(tx_ring->dev,dma)){
+		goto dma_error;
+	}
 
 	pr_info("tx pkt dma addr %#llx, length %lld, q idx %d\n",tx_desc->addr,tx_desc->length,q_idx);
 	/*
@@ -1350,6 +1354,8 @@ dma_error:
 	return 0;
 }*/
 
+static void mnic_irq_disable(struct mnic_adapter *adapter);
+
 void mnic_down(struct mnic_adapter *adapter)
 {
 	struct net_device *ndev = adapter->ndev;
@@ -1371,6 +1377,7 @@ void mnic_down(struct mnic_adapter *adapter)
 		}
 	}
 	*/
+	mnic_irq_disable(adapter);
 
 	mnic_clean_all_tx_rings(adapter);
 	mnic_clean_all_rx_rings(adapter);
@@ -1844,7 +1851,7 @@ static int mnic_sw_init(struct mnic_adapter *adapter)
 		return -ENOMEM;
 	}
 
-	mnic_irq_disable(adapter);
+	//mnic_irq_disable(adapter);
 
 	pr_info("%s: end \n",__func__);
 
@@ -1854,7 +1861,7 @@ static int mnic_sw_init(struct mnic_adapter *adapter)
 static int mnic_probe(struct pci_dev *pdev,const struct pci_device_id *ent)
 {
 	int i,ret;
-	int pci_using_dac;	
+	//int pci_using_dac;	
 	void *bar0,*bar2,*bar4;
 	uint64_t bar0_start,bar0_len;
 	uint64_t bar2_start,bar2_len;
@@ -2051,6 +2058,7 @@ static void mnic_remove(struct pci_dev *pdev)
 	iounmap(adapter->bar2);
 	iounmap(adapter->bar0);
 
+	//free_netdev(dev);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
 
