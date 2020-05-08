@@ -102,6 +102,8 @@ struct nettlp_mnic{
 };
 
 //struct nettlp *rx_dma_nt[5];
+struct nettlp_mnic *mnic_f;
+void mnic_free(struct nettlp_mnic *mnic);
 
 int tap_alloc(char *dev)
 {
@@ -160,6 +162,7 @@ static int caught_signal = 0;
 void signal_handler(int signal)
 {
 	caught_signal = 1;
+	mnic_free(mnic_f);
 	nettlp_stop_cb();
 }
 
@@ -447,6 +450,33 @@ void mnic_alloc(struct nettlp_mnic *mnic)
 	//mnic->rx_dma_read_nt = calloc(RX_NT_SIZE,sizeof(struct nettlp));
 }
 
+void mnic_free(struct nettlp_mnic *mnic)
+{
+	int i;
+	struct tx_desc_ctl *txdp;
+
+	free(mnic->tx_desc_base);
+	free(mnic->rx_desc_base);
+	free(mnic->rx_desc_addr);
+
+	free(mnic->tx_irq);
+	free(mnic->rx_irq);
+
+	txdp = mnic->tx_desc_ctl;
+	for(i=0;i<TX_QUEUES;i++){
+		free(txdp->tx_buf);
+		txdp++;
+	}
+
+	free(mnic->tx_desc_ctl);
+	free(mnic->rx_desc_ctl);
+
+	for(i=0;i<RX_QUEUES;i++){
+		free(mnic->tx_desc[i]);
+		free(mnic->rx_desc[i]);
+	}
+}
+
 void usage()
 {
 	printf("usage\n"
@@ -520,6 +550,7 @@ int main(int argc,char **argv)
         }
         
 	memset(&mnic,0,sizeof(mnic));
+	mnic_f = &mnic;
 	mnic.tap_fd = tap_fd;
 
 	mnic_alloc(&mnic);
