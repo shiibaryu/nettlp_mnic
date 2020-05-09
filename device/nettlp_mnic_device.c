@@ -168,7 +168,7 @@ void signal_handler(int signal)
 
 void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned int offset)
 {
-	int ret;
+	int ret,batch;
 	struct descriptor *tx_desc = mnic->tx_desc[offset];
 	struct tx_desc_ctl *txd_ctl = mnic->tx_desc_ctl + offset;
 	unsigned char *buf = mnic->tx_desc_ctl->tx_buf;
@@ -177,18 +177,25 @@ void mnic_tx(uint32_t idx,struct nettlp *nt,struct nettlp_mnic *mnic,unsigned in
 
 	tx_desc += txd_ctl->tx_tail_idx;
 	buf += txd_ctl->tx_tail_idx;
+	batch = idx - txd_ctl->tx_tail_idx;
+
+	if(batch < 0){
+		batch += DESC_ENTRY_SIZE;	
+	}
+	
+	//info("dma read tx desc: addr %#lx, tail idx %d, idx %d,offset %d",txd_ctl->tx_desc_tail,idx,txd_ctl->tx_tail_idx,offset);
+	info("dma read tx desc: addr %#lx, batching %d, offset %d",txd_ctl->tx_desc_tail,batch,offset);
+	info("idx %d, tail idx %d",idx,txd_ctl->tx_tail_idx);
+
+	ret = dma_read(&mnic->tx_nt[offset],txd_ctl->tx_desc_tail,tx_desc,sizeof(struct descriptor)*batch);
+	if(ret < sizeof(struct descriptor)*batch){
+		debug("failed to read tx desc from %#lx",txd_ctl->tx_desc_tail);
+		debug("idx is %d, tail is %d",idx,txd_ctl->tx_tail_idx);
+		buf = NULL;
+		goto tx_tail_ctr;
+	}
 
 	while(txd_ctl->tx_tail_idx != idx){
-		info("dma read tx desc: addr %#lx, tail idx %d, idx %d,offset %d",txd_ctl->tx_desc_tail,idx,txd_ctl->tx_tail_idx,offset);
-		//ret = dma_read(nt,txd_ctl->tx_desc_tail,tx_desc,sizeof(struct descriptor));
-		ret = dma_read(&mnic->tx_nt[offset],txd_ctl->tx_desc_tail,tx_desc,sizeof(struct descriptor));
-		if(ret < sizeof(struct descriptor)){
-			debug("failed to read tx desc from %#lx",txd_ctl->tx_desc_tail);
-			debug("idx is %d, tail is %d",idx,txd_ctl->tx_tail_idx);
-			buf = NULL;
-			goto tx_tail_ctr;
-		}
-		
 		info("dma read a pkt: addr %#lx, length %ld",tx_desc->addr,tx_desc->length);
 		//ret = dma_read(nt,tx_desc->addr,buf,tx_desc->length);
 		ret = dma_read(&mnic->tx_nt[offset],tx_desc->addr,buf,tx_desc->length);
