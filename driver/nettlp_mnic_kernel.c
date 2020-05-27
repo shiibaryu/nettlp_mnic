@@ -508,17 +508,12 @@ static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector,int napi_budget)
 
 	pr_info("%s: start \n",__func__);
 
-	pr_info("%s: i is %d \n",__func__,i);
 	pr_info("%s: budget is %d \n",__func__,budget);
 
 	tx_buff = &tx_ring->tx_buf_info[i];
 	tx_desc = MNIC_TX_DESC(tx_ring,i); 
 	i -= tx_ring->count;
-	pr_info("%s: i - tx_ring->count is %d \n",__func__,i);
-	pr_info("%s: tx_ring->count is %d \n",__func__,tx_ring->count);
 	
-	dma_unmap_single(tx_ring->dev,tx_desc->addr,sizeof(struct descriptor),DMA_BIDIRECTIONAL);
-
 	do{
 		struct descriptor *eop_desc = tx_buff->next_to_watch;
 		if(!eop_desc){
@@ -584,7 +579,8 @@ static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector,int napi_budget)
 	
 	pr_info("%s: end \n",__func__);
 
-	return !!budget;
+	return 0;
+	//return !!budget;
 }
 
 
@@ -942,8 +938,6 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 		rx_desc = MNIC_RX_DESC(rx_ring,rx_ring->next_to_clean);
 		dma_rmb();
 		
-		dma_unmap_single(rx_ring->dev,rx_desc->addr,2048,DMA_FROM_DEVICE);
-
 		skb = mnic_fetch_rx_buffer(rx_ring,rx_desc,skb);
 		if(!skb){
 			pr_err("%s: failed to fetch rx buffer\n",__func__);
@@ -958,6 +952,8 @@ static bool mnic_clean_rx_irq(struct mnic_q_vector *q_vector,const int budget)
 
 		cleaned_count++;
 	
+		dma_unmap_single(rx_ring->dev,rx_desc->addr,2048,DMA_FROM_DEVICE);
+
 		mnic_is_non_eop(rx_ring,rx_desc);
 		total_bytes += skb->len;
 		skb_record_rx_queue(skb,rx_ring->queue_idx);
