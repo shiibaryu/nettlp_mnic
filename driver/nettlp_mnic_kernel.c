@@ -579,7 +579,7 @@ static bool mnic_clean_tx_irq(struct mnic_q_vector *q_vector,int napi_budget)
 	
 	pr_info("%s: end \n",__func__);
 
-	return 0;
+	return true;
 	//return !!budget;
 }
 
